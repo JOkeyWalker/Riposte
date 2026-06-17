@@ -1,7 +1,7 @@
 # Riposte 🗡️
 **A portable PowerShell-based SOC triage and threat hunting toolkit designed for remote shell environments.**
 
-*Riposte (French: counterattack)*
+*Made using Gemini + Claude*
 
 ---
 
