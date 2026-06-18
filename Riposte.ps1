@@ -405,13 +405,25 @@ function Invoke-Remediation {
             }
 
             "Task" {
-                $task = Get-ScheduledTask -TaskName $path -ErrorAction SilentlyContinue
+                # RemediationPath stored as \TaskPath\TaskName or just TaskName
+                $taskName = Split-Path $path -Leaf
+                $taskPath = Split-Path $path -Parent
+                if (-not $taskPath -or $taskPath -eq '.') { $taskPath = '\' }
+
+                # Try exact match with full path first
+                $task = Get-ScheduledTask -TaskName $taskName -TaskPath "$taskPath\" -ErrorAction SilentlyContinue
                 if (-not $task) {
-                    # Try with wildcards in case path includes task folder
-                    $task = Get-ScheduledTask | Where-Object { $_.TaskName -eq $path } | Select-Object -First 1
+                    # Fall back to name-only search across all paths
+                    $task = Get-ScheduledTask | Where-Object { $_.TaskName -eq $taskName } | Select-Object -First 1
                 }
                 if ($task) {
                     Unregister-ScheduledTask -TaskName $task.TaskName -TaskPath $task.TaskPath -Confirm:$false -ErrorAction Stop
+                    # Verify it's actually gone
+                    $verify = Get-ScheduledTask -TaskName $task.TaskName -TaskPath $task.TaskPath -ErrorAction SilentlyContinue
+                    if ($verify) {
+                        Write-Host "  [!] Task still exists after removal attempt — may require manual deletion." -ForegroundColor Red
+                        return $false
+                    }
                     Write-Host "  [+] Scheduled task removed: $path" -ForegroundColor Green
                 } else {
                     Write-Host "  [-] Scheduled task not found: $path" -ForegroundColor Red
@@ -715,7 +727,7 @@ function Get-Persistence {
                     SHA1            = $hashes.SHA1
                     SHA256          = $hashes.SHA256
                     RemediationType = "Task"
-                    RemediationPath = $task.TaskName
+                    RemediationPath = "$($task.TaskPath.TrimEnd('/'))\$($task.TaskName)"
                 }
             } catch {}
         }
@@ -930,7 +942,7 @@ function Invoke-GlobalHunt {
                     SHA1            = $hashes.SHA1
                     SHA256          = $hashes.SHA256
                     RemediationType = "Task"
-                    RemediationPath = $task.TaskName
+                    RemediationPath = "$($task.TaskPath.TrimEnd('/'))\$($task.TaskName)"
                 }
             }
         } catch {}
@@ -1292,46 +1304,113 @@ function Get-S1ThreatHunt {
             $searchKeywords += "*$baseName*"
         }
 
-        # Generic/noisy tokens that are too broad to be useful as standalone search terms
+        # Broad/generic tokens never useful as standalone search terms
+        # Covers: file types, installer words, platform words, common English components,
+        # browser/app parts, version words, and short ambiguous words
         $noisyTokens = @(
+            # File extensions / formats
             'pdf','doc','docx','xls','xlsx','ppt','pptx','exe','msi','zip','rar','7z','iso','img',
-            'setup','install','installer','update','updater','patch','new','file','files',
-            'windows','win','win32','win64','x86','x64','32bit','64bit',
-            'app','application','tool','tools','utility','utilities','program','programs',
-            'free','trial','lite','pro','plus','premium','full','final','release','build',
-            'tmp','temp','cache','data','log','logs','run','get','set','the','and','for'
+            'dll','sys','bat','cmd','vbs','js','ps1','reg','ini','cfg','xml','json','txt','csv',
+            # Installer / deployment words
+            'setup','install','installer','uninstall','update','updater','upgrade','patch',
+            'deploy','deployer','deployment','launch','launcher','bootstrap',
+            # Platform / architecture
+            'windows','win','win32','win64','x86','x64','32bit','64bit','arm','arm64',
+            # Generic app component words
+            'app','application','apps','tool','tools','utility','utilities','program','programs',
+            'service','services','agent','client','server','host','helper','handler',
+            'manager','monitor','watcher','daemon','worker','broker','proxy',
+            # Browser / web component words
+            'browser','chrome','web','http','https','net','online','cloud',
+            # Common English suffix/prefix components that split out of compound words
+            'next','this','that','plus','lite','pro','max','mini','micro','nano',
+            'new','old','fast','quick','easy','smart','auto','sync','link',
+            'reader','viewer','player','writer','editor','finder','scanner',
+            'open','run','get','set','go','do','use','make','load','save',
+            # Version / release words
+            'free','trial','beta','alpha','demo','full','final','release','build','version','rev',
+            # Noise / temp words
+            'tmp','temp','cache','data','log','logs','output','input','info','test','debug',
+            # Common short English words
+            'the','and','for','with','from','into','onto','upon','over','under','about'
         )
 
-        # Split on common separators and extract meaningful word tokens (3+ chars, not pure hex/digits)
-        $tokens = $baseName -split '[\s\-_\.\(\)\[\]]+'
-        foreach ($token in $tokens) {
-            $token = $token.Trim()
-            # Skip: short, pure numeric, pure hex hashes, noisy generic words, already added
-            if ($token.Length -lt 3)                               { continue }
-            if ($token -match '^\d+$')                             { continue }
-            if ($token -match '^[a-fA-F0-9]{6,}$')                { continue }
-            if ($noisyTokens -contains $token.ToLower())           { continue }
-            if ($searchKeywords -contains $token)                  { continue }
-            if ($searchKeywords -contains "*$token*")              { continue }
-            $searchKeywords += $token
+        # Helper: test a candidate token against all noise/length rules
+        function Test-TokenIsUseful {
+            param([string]$t, [array]$noisy, [array]$existing)
+            if ($t.Length -lt 5)                          { return $false }
+            if ($t -match '^\d+$')                        { return $false }
+            if ($t -match '^[a-fA-F0-9]{6,}$')           { return $false }
+            if ($noisy -contains $t.ToLower())            { return $false }
+            if ($existing -contains $t)                   { return $false }
+            if ($existing -contains "*$t*")               { return $false }
+            return $true
         }
 
-        # Strip trailing random suffix patterns and add cleaned base
-        # e.g. "Shift - PDF_x65q7m" -> "Shift - PDF"
+        # Split on common separators first
+        $separatorTokens = $baseName -split '[\s\-_\.\(\)\[\]]+'
+
+        foreach ($token in $separatorTokens) {
+            $token = $token.Trim()
+            if (-not $token) { continue }
+
+            # CamelCase / PascalCase split — e.g. "OneBrowserUpdater" -> "One","Browser","Updater"
+            # Insert a space before each uppercase letter that follows a lowercase letter
+            $camelParts = [regex]::Replace($token, '(?<=[a-z])(?=[A-Z])', ' ') -split ' '
+
+            # Also handle transitions from multiple caps to lowercase: "PDFNext" -> "PDF","Next"
+            $camelParts = $camelParts | ForEach-Object {
+                [regex]::Replace($_, '(?<=[A-Z]{2,})(?=[A-Z][a-z])', ' ') -split ' '
+            }
+
+            # Build candidate substrings: individual camel parts + adjacent pairs + the full token
+            $candidates = @()
+            $camelParts = @($camelParts | Where-Object { $_ })
+            for ($i = 0; $i -lt $camelParts.Count; $i++) {
+                $candidates += $camelParts[$i]
+                # Adjacent pair (e.g. "OneBrowser" from ["One","Browser","Updater"])
+                if ($i -lt $camelParts.Count - 1) {
+                    $candidates += "$($camelParts[$i])$($camelParts[$i+1])"
+                }
+            }
+            # Always include the full unsplit token as a candidate
+            $candidates += $token
+
+            foreach ($c in ($candidates | Select-Object -Unique)) {
+                if (Test-TokenIsUseful -t $c -noisy $noisyTokens -existing $searchKeywords) {
+                    $searchKeywords += $c
+                }
+            }
+        }
+
+        # Strip trailing random suffix (e.g. "Shift - PDF_x65q7m" -> "*Shift - PDF*")
+        # Only add cleaned base if it isn't itself a noisy generic word
         if ($baseName -match '^(.+?)[_-][a-zA-Z0-9]{4,10}$') {
             $cleaned = $Matches[1].Trim()
-            if ($cleaned.Length -gt 3 -and $searchKeywords -notcontains "*$cleaned*") {
+            $cleanedLower = $cleaned.ToLower() -replace '[\s\-_]',''
+            if ($cleaned.Length -gt 4 -and
+                ($noisyTokens -notcontains $cleanedLower) -and
+                ($searchKeywords -notcontains "*$cleaned*")) {
                 $searchKeywords += "*$cleaned*"
             }
         }
     }
 
-    # Publisher / Signer — search for company name tokens (skip generic words)
-    $skipWords = @('inc','ltd','llc','corp','co','the','and','technologies','software','systems','group','solutions')
+    # Publisher / Signer — search for company name tokens (skip all generic business/tech words)
+    $skipWords = @(
+        'inc','ltd','llc','corp','co','the','and','or',
+        'technologies','technology','tech','software','systems','system',
+        'group','solutions','solution','services','global','international',
+        'company','enterprises','engineering','industries','digital','network',
+        'security','consulting','partners','holdings','labs','studio','media'
+    )
     foreach ($sigField in @($iocs.Publisher, $iocs.Signer)) {
         if (-not $sigField) { continue }
         $sigTokens = $sigField -split '[\s,]+' | Where-Object {
-            $_.Length -ge 4 -and ($skipWords -notcontains $_.ToLower()) -and ($searchKeywords -notcontains $_)
+            $_.Length -ge 5 -and
+            ($skipWords -notcontains $_.ToLower()) -and
+            ($noisyTokens -notcontains $_.ToLower()) -and
+            ($searchKeywords -notcontains $_)
         }
         foreach ($tok in $sigTokens) {
             $searchKeywords += $tok
