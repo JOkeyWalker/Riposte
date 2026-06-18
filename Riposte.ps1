@@ -6,6 +6,11 @@
 .DESCRIPTION
     100% CLI-native script. Safe for SentinelOne, WinRM, and reverse shells.
     Optimized to prevent console hangs, support multi-line pasting, and handle wildcards.
+.NOTES
+    To pull directly from GitHub onto a device (e.g. via ConnectWise Backstage):
+
+    Invoke-WebRequest -Uri "https://raw.githubusercontent.com/JOkeyWalker/Riposte/refs/heads/main/Riposte.ps1" -OutFile "Riposte.ps1"
+    powershell -ExecutionPolicy Bypass -File "Riposte.ps1"
 #>
 
 $ErrorActionPreference = "SilentlyContinue"
