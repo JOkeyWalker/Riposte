@@ -6,7 +6,7 @@
 ---
 
 ## Overview
-Riposte is a self-contained PowerShell script built for SOC analysts who need to hunt, triage, and remediate threats directly from remote shells such as SentinelOne Remote Shell, ConnectWise ScreenConnect Backstage, or WinRM — no agents, no installations, no hosting required. Copy, paste, and go.
+Riposte is a self-contained PowerShell script built for SOC analysts who need to hunt, triage, and remediate threats by copy/pasting into a SentinelOne Remote Shell, using ConnectWise ScreenConnect Backstage, or WinRM.
 
 ---
 
@@ -32,7 +32,7 @@ Riposte is a self-contained PowerShell script built for SOC analysts who need to
 ---
 
 ## Usage
-Paste directly into your remote shell or if running local copy on device:
+Paste directly into your Sentinel One Remote Shell or if running local pulled copy on device:
 ```powershell
 powershell -ExecutionPolicy Bypass -File "C:\Path\To\File\Riposte.ps1"
 ```
