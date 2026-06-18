@@ -1447,11 +1447,8 @@ function Get-S1ThreatHunt {
         }
     }
 
-    if ($iocs.SHA1)   { $searchKeywords += $iocs.SHA1 }
-    if ($iocs.SHA256) { $searchKeywords += $iocs.SHA256 }
-
     if ($searchKeywords.Count -eq 0) {
-        Write-Host "[-] Could not extract any actionable IOCs (Name or Hashes) from the pasted text." -ForegroundColor Red
+        Write-Host "[-] Could not extract any actionable IOCs from the pasted text." -ForegroundColor Red
         Pause
         return
     }
@@ -1463,7 +1460,60 @@ function Get-S1ThreatHunt {
     }
     $regexKeyword = "(" + ($regexPatterns -join '|') + ")"
 
-    # Run the hunt (only pass direct IOCs if the file was NOT already deleted)
+    # --- HASH VERIFICATION ---
+    # Rather than searching filenames for hash strings (useless), compute the actual
+    # hash of any files found at the known path/name and compare against IOC hashes.
+    if ($iocs.SHA1 -or $iocs.SHA256) {
+        Write-Host ""
+        Write-Host "[*] Running hash verification against known IOC hashes..." -ForegroundColor Yellow
+
+        $hashTargets = @()
+
+        # Check the exact path from the alert
+        if ($iocs.Path -and (Test-Path $iocs.Path)) {
+            $hashTargets += $iocs.Path
+        }
+
+        # Search for any file matching the threat name on disk (common locations)
+        if ($iocs.Name) {
+            $searchRoots = @("$env:USERPROFILE\Downloads","$env:TEMP","C:\Windows\Temp","$env:APPDATA","$env:LOCALAPPDATA","C:\ProgramData")
+            foreach ($root in $searchRoots) {
+                if (-not (Test-Path $root)) { continue }
+                $found = Get-ChildItem -Path $root -Filter $iocs.Name -Recurse -File -Force -ErrorAction SilentlyContinue
+                foreach ($f in $found) {
+                    if ($hashTargets -notcontains $f.FullName) { $hashTargets += $f.FullName }
+                }
+            }
+        }
+
+        if ($hashTargets.Count -eq 0) {
+            Write-Host "  [-] No files found at known paths for hash verification." -ForegroundColor DarkGray
+        } else {
+            foreach ($target in $hashTargets) {
+                Write-Host "  [*] Hashing: $target" -ForegroundColor DarkGray
+                $computed = Get-FileHashes -filePath $target
+                $sha1Match   = $iocs.SHA1   -and ($computed.SHA1   -eq $iocs.SHA1)
+                $sha256Match = $iocs.SHA256 -and ($computed.SHA256 -eq $iocs.SHA256)
+
+                if ($sha1Match -or $sha256Match) {
+                    Write-Host "  [!] HASH MATCH CONFIRMED: $target" -ForegroundColor Red
+                    Write-Host "      Computed SHA1  : $($computed.SHA1)"   -ForegroundColor Red
+                    Write-Host "      Computed SHA256: $($computed.SHA256)" -ForegroundColor Red
+                    Write-Host "      IOC SHA1       : $($iocs.SHA1)"       -ForegroundColor DarkGray
+                    Write-Host "      IOC SHA256     : $($iocs.SHA256)"     -ForegroundColor DarkGray
+                } else {
+                    Write-Host "  [+] No hash match: $target" -ForegroundColor Green
+                    Write-Host "      Computed SHA1  : $($computed.SHA1)"   -ForegroundColor DarkGray
+                    Write-Host "      Computed SHA256: $($computed.SHA256)" -ForegroundColor DarkGray
+                }
+            }
+        }
+        Write-Host ""
+        Pause
+        Write-Host ""
+    }
+
+    # Run the keyword hunt (hashes excluded — hash verification handled above)
     $directIocsToPass = if ($targetDeleted) { $null } else { $iocs }
     Invoke-GlobalHunt -keywords $searchKeywords -regexPattern $regexKeyword -pathInput $null -directIocs $directIocsToPass
 }
