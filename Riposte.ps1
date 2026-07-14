@@ -395,7 +395,7 @@ function Invoke-Remediation {
                     Remove-Item -Path $path -Recurse -Force -ErrorAction Stop
                     Write-Host "  [+] Registry key removed: $path" -ForegroundColor Green
                 } else {
-                    # Might be a value rather than a key — try parent key
+                    # Might be a value rather than a key  -  try parent key
                     $parent = Split-Path $path -Parent
                     $valueName = Split-Path $path -Leaf
                     if (Test-Path $parent) {
@@ -426,7 +426,7 @@ function Invoke-Remediation {
                     # Verify it's actually gone
                     $verify = Get-ScheduledTask -TaskName $task.TaskName -TaskPath $task.TaskPath -ErrorAction SilentlyContinue
                     if ($verify) {
-                        Write-Host "  [!] Task still exists after removal attempt — may require manual deletion." -ForegroundColor Red
+                        Write-Host "  [!] Task still exists after removal attempt  -  may require manual deletion." -ForegroundColor Red
                         return $false
                     }
                     Write-Host "  [+] Scheduled task removed: $path" -ForegroundColor Green
@@ -527,12 +527,12 @@ function Process-RemediationLoop {
     $activeItems = $items
     if (-not $activeItems) { $activeItems = @() }
     $loop = $true
-    $pageSize = 40
+    $pageSize = 80
     $currentPage = 0
     
     while ($loop -and $activeItems.Count -gt 0) {
         # Only use paging if total results exceed 40
-        $usePaging = $activeItems.Count -gt 40
+        $usePaging = $activeItems.Count -gt 80
         $totalPages = if ($usePaging) { [Math]::Ceiling($activeItems.Count / $pageSize) } else { 1 }
         
         if ($currentPage -ge $totalPages) { $currentPage = $totalPages - 1 }
@@ -1186,7 +1186,7 @@ function Invoke-GlobalHunt {
                 }
             }
         } catch {
-            # Log not accessible or no events in range — skip silently
+            # Log not accessible or no events in range  -  skip silently
         }
     }
 
@@ -1359,7 +1359,7 @@ function Get-S1ThreatHunt {
             $token = $token.Trim()
             if (-not $token) { continue }
 
-            # CamelCase / PascalCase split — e.g. "OneBrowserUpdater" -> "One","Browser","Updater"
+            # CamelCase / PascalCase split  -  e.g. "OneBrowserUpdater" -> "One","Browser","Updater"
             # Insert a space before each uppercase letter that follows a lowercase letter
             $camelParts = [regex]::Replace($token, '(?<=[a-z])(?=[A-Z])', ' ') -split ' '
 
@@ -1401,7 +1401,7 @@ function Get-S1ThreatHunt {
         }
     }
 
-    # Publisher / Signer — search for company name tokens (skip all generic business/tech words)
+    # Publisher / Signer  -  search for company name tokens (skip all generic business/tech words)
     $skipWords = @(
         'inc','ltd','llc','corp','co','the','and','or',
         'technologies','technology','tech','software','systems','system',
@@ -1422,7 +1422,7 @@ function Get-S1ThreatHunt {
         }
     }
 
-    # Originating Process — add if not a broad/noisy system process
+    # Originating Process  -  add if not a broad/noisy system process
     if ($iocs.Origin) {
         $noisyProcs = @(
             'chrome.exe','firefox.exe','msedge.exe','iexplore.exe','opera.exe','brave.exe','safari.exe',
@@ -1513,7 +1513,7 @@ function Get-S1ThreatHunt {
         Write-Host ""
     }
 
-    # Run the keyword hunt (hashes excluded — hash verification handled above)
+    # Run the keyword hunt (hashes excluded  -  hash verification handled above)
     $directIocsToPass = if ($targetDeleted) { $null } else { $iocs }
     Invoke-GlobalHunt -keywords $searchKeywords -regexPattern $regexKeyword -pathInput $null -directIocs $directIocsToPass
 }
