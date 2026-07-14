@@ -2255,7 +2255,7 @@ function Get-BrowserForensics {
 
         foreach ($browser in $browserDefs) {
             # Build path directly from user root — no env var substitution needed
-            $appDataSub  = if ($browser.Roaming) { "AppData\Roaming" } else { "AppData\Local" }
+            $appDataSub  = if ($browser.ContainsKey('Roaming') -and $browser.Roaming) { "AppData\Roaming" } else { "AppData\Local" }
             $profileBase = "$userRoot\$appDataSub\$($browser.LocalPath)"
 
             Write-Host "    Checking: $profileBase" -ForegroundColor DarkGray
