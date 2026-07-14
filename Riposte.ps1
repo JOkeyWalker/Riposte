@@ -2164,6 +2164,307 @@ function Get-RMMHunt {
     }
 }
 
+function Get-BrowserForensics {
+    Show-Banner
+    Write-Host "===============================================================" -ForegroundColor DarkCyan
+    Write-Host "  BROWSER FORENSICS" -ForegroundColor Yellow
+    Write-Host "  Extensions and History - Chrome, Edge, Brave, Firefox" -ForegroundColor DarkGray
+    Write-Host "===============================================================" -ForegroundColor DarkCyan
+    Write-Host ""
+
+    # Timeframe prompt for history
+    Write-Host "  History Timeframe Examples:" -ForegroundColor DarkGray
+    Write-Host "     30m, 1h, 2h, 6h, 1d, 7d" -ForegroundColor DarkGray
+    Write-Host ""
+    $timeInput = Read-Host " [?] Enter history timeframe (or Q to cancel)"
+    if ($timeInput -eq 'Q' -or $timeInput -eq 'q') { return }
+    if (-not $timeInput) { $timeInput = "24h" }
+    $parsedTime = Parse-Timeframe -inputString $timeInput
+    if (-not $parsedTime -or -not $parsedTime.StartTime) {
+        Write-Host "[-] Invalid timeframe. Using last 24 hours." -ForegroundColor Yellow
+        $parsedTime = @{ StartTime = (Get-Date).AddHours(-24); EndTime = Get-Date }
+    }
+
+    # EST timezone for display
+    try {
+        $estZone = [System.TimeZoneInfo]::FindSystemTimeZoneById("Eastern Standard Time")
+    } catch {
+        $estZone = $null
+    }
+    function Convert-ToEST {
+        param([datetime]$dt)
+        if ($estZone) {
+            return [System.TimeZoneInfo]::ConvertTimeFromUtc($dt.ToUniversalTime(), $estZone)
+        }
+        return $dt
+    }
+
+    $results = @()
+
+    # Browser profile definitions
+    $browsers = @(
+        @{
+            Name        = "Google Chrome"
+            ProfileBase = "$env:LOCALAPPDATA\Google\Chrome\User Data"
+            HistoryFile = "History"
+            ExtFolder   = "Extensions"
+            Type        = "Chromium"
+        },
+        @{
+            Name        = "Microsoft Edge"
+            ProfileBase = "$env:LOCALAPPDATA\Microsoft\Edge\User Data"
+            HistoryFile = "History"
+            ExtFolder   = "Extensions"
+            Type        = "Chromium"
+        },
+        @{
+            Name        = "Brave"
+            ProfileBase = "$env:LOCALAPPDATA\BraveSoftware\Brave-Browser\User Data"
+            HistoryFile = "History"
+            ExtFolder   = "Extensions"
+            Type        = "Chromium"
+        },
+        @{
+            Name        = "Firefox"
+            ProfileBase = "$env:APPDATA\Mozilla\Firefox\Profiles"
+            HistoryFile = "places.sqlite"
+            ExtFolder   = "extensions"
+            Type        = "Firefox"
+        }
+    )
+
+    # Also check all user profiles for per-user browser installs
+    $userRoots = @()
+    $userRoots += $env:USERPROFILE
+    $allUsers = Get-ChildItem "C:\Users" -Directory -ErrorAction SilentlyContinue | Where-Object {
+        $_.Name -notmatch '^(Public|Default|Default User|All Users)$'
+    }
+    foreach ($u in $allUsers) {
+        if ($u.FullName -ne $env:USERPROFILE) { $userRoots += $u.FullName }
+    }
+
+    foreach ($userRoot in $userRoots) {
+        $userName = Split-Path $userRoot -Leaf
+
+        foreach ($browser in $browsers) {
+            $profileBase = $browser.ProfileBase -replace [regex]::Escape($env:LOCALAPPDATA), "$userRoot\AppData\Local" `
+                                                 -replace [regex]::Escape($env:APPDATA), "$userRoot\AppData\Roaming"
+
+            if (-not (Test-Path $profileBase)) { continue }
+
+            # Collect profile directories
+            $profileDirs = @()
+            if ($browser.Type -eq "Chromium") {
+                # Default profile + Profile 1, Profile 2, etc.
+                if (Test-Path "$profileBase\Default") { $profileDirs += "$profileBase\Default" }
+                $profileDirs += Get-ChildItem $profileBase -Directory -ErrorAction SilentlyContinue |
+                    Where-Object { $_.Name -match '^Profile \d+$' } |
+                    ForEach-Object { $_.FullName }
+            } else {
+                # Firefox: each subdirectory is a profile
+                $profileDirs += Get-ChildItem $profileBase -Directory -ErrorAction SilentlyContinue |
+                    ForEach-Object { $_.FullName }
+            }
+
+            foreach ($profileDir in $profileDirs) {
+                $profileLabel = "$($browser.Name) [$userName - $(Split-Path $profileDir -Leaf)]"
+
+                # -------------------------------------------------------
+                # EXTENSIONS
+                # -------------------------------------------------------
+                $extBase = "$profileDir\$($browser.ExtFolder)"
+                if (Test-Path $extBase) {
+                    if ($browser.Type -eq "Chromium") {
+                        $extFolders = Get-ChildItem $extBase -Directory -ErrorAction SilentlyContinue
+                        foreach ($extDir in $extFolders) {
+                            # Each extension has version subdirectories
+                            $versionDirs = Get-ChildItem $extDir.FullName -Directory -ErrorAction SilentlyContinue |
+                                Sort-Object Name -Descending | Select-Object -First 1
+                            $manifestPath = if ($versionDirs) { "$($versionDirs.FullName)\manifest.json" } else { "$($extDir.FullName)\manifest.json" }
+
+                            if (-not (Test-Path $manifestPath)) { continue }
+
+                            try {
+                                $manifest = Get-Content $manifestPath -Raw -ErrorAction Stop | ConvertFrom-Json
+                                $extName    = if ($manifest.name -notmatch '^__MSG_') { $manifest.name } else { $extDir.Name }
+                                $extVersion = $manifest.version
+                                $extDesc    = if ($manifest.description -notmatch '^__MSG_') { $manifest.description } else { "" }
+                                $perms      = if ($manifest.permissions) { ($manifest.permissions | Where-Object { $_ -is [string] }) -join ", " } else { "None" }
+                                $installDate = try { (Get-Item $extDir.FullName).CreationTime.ToString("yyyy-MM-dd HH:mm:ss") } catch { "Unknown" }
+                                $source     = if ($manifest.update_url -match "google|gstatic") { "Chrome Web Store" }
+                                              elseif ($manifest.update_url -match "edge.microsoft") { "Edge Add-ons Store" }
+                                              elseif ($manifest.update_url) { "External Update URL" }
+                                              else { "Sideloaded / Unpacked" }
+
+                                $results += [PSCustomObject]@{
+                                    Type            = "Extension"
+                                    User            = $userName
+                                    Timestamp       = "Installed: $installDate"
+                                    Name            = "$extName (v$extVersion)"
+                                    Value           = "Browser: $($browser.Name) | Source: $source | Perms: $perms"
+                                    SHA1            = "N/A"
+                                    SHA256          = "N/A"
+                                    RemediationType = "File"
+                                    RemediationPath = $extDir.FullName
+                                }
+                            } catch { continue }
+                        }
+                    } elseif ($browser.Type -eq "Firefox") {
+                        # Firefox extensions.json
+                        $extJson = "$profileDir\extensions.json"
+                        if (Test-Path $extJson) {
+                            try {
+                                $extData = Get-Content $extJson -Raw | ConvertFrom-Json
+                                foreach ($addon in $extData.addons) {
+                                    if ($addon.type -ne "extension") { continue }
+                                    $perms = if ($addon.userPermissions.permissions) { $addon.userPermissions.permissions -join ", " } else { "None" }
+                                    $installDate = try {
+                                        $epoch = [datetime]"1970-01-01"
+                                        $epoch.AddMilliseconds($addon.installDate).ToString("yyyy-MM-dd HH:mm:ss")
+                                    } catch { "Unknown" }
+                                    $source = if ($addon.sourceURI -match "addons.mozilla") { "Firefox Add-ons Store" }
+                                              elseif ($addon.foreignInstall) { "Sideloaded / External" }
+                                              else { "Unknown" }
+
+                                    $results += [PSCustomObject]@{
+                                        Type            = "Extension"
+                                        User            = $userName
+                                        Timestamp       = "Installed: $installDate"
+                                        Name            = "$($addon.defaultLocale.name) (v$($addon.version))"
+                                        Value           = "Browser: Firefox | Source: $source | Perms: $perms"
+                                        SHA1            = "N/A"
+                                        SHA256          = "N/A"
+                                        RemediationType = "File"
+                                        RemediationPath = $addon.path
+                                    }
+                                }
+                            } catch { }
+                        }
+                    }
+                }
+
+                # -------------------------------------------------------
+                # HISTORY
+                # -------------------------------------------------------
+                $historyFile = "$profileDir\$($browser.HistoryFile)"
+                if (-not (Test-Path $historyFile)) { continue }
+
+                # Copy to temp to avoid SQLite lock while browser is open
+                $tempHistory = "$env:TEMP\riposte_hist_$([System.IO.Path]::GetRandomFileName()).db"
+                try {
+                    Copy-Item $historyFile $tempHistory -Force -ErrorAction Stop
+                } catch { continue }
+
+                try {
+                    if ($browser.Type -eq "Chromium") {
+                        # Chrome stores timestamps as microseconds since 1601-01-01
+                        $chromiumEpoch = [datetime]"1601-01-01"
+
+                        # Read raw SQLite bytes and extract URLs/titles/timestamps
+                        # We parse the SQLite file directly without external tools
+                        $dbBytes = [System.IO.File]::ReadAllBytes($tempHistory)
+                        $dbText  = [System.Text.Encoding]::UTF8.GetString($dbBytes)
+
+                        # Extract records using .NET SQLite via built-in System.Data.SQLite if available,
+                        # otherwise fall back to string parsing of the binary
+                        $sqliteAvail = $false
+                        try {
+                            Add-Type -AssemblyName System.Data -ErrorAction Stop
+                            # Try loading SQLite via ADO.NET
+                            $conn = New-Object System.Data.SQLite.SQLiteConnection("Data Source=$tempHistory;Version=3;Read Only=True;")
+                            $conn.Open()
+                            $cmd = $conn.CreateCommand()
+                            $cmd.CommandText = "SELECT url, title, last_visit_time FROM urls ORDER BY last_visit_time DESC LIMIT 2000"
+                            $reader = $cmd.ExecuteReader()
+                            while ($reader.Read()) {
+                                $microSec = $reader.GetInt64(2)
+                                $visitTime = $chromiumEpoch.AddTicks($microSec * 10)
+                                if ($visitTime -lt $parsedTime.StartTime -or $visitTime -gt $parsedTime.EndTime) { continue }
+                                $displayTime = (Convert-ToEST -dt $visitTime).ToString("yyyy-MM-dd HH:mm:ss")
+                                $url   = $reader.GetString(0)
+                                $title = try { $reader.GetString(1) } catch { "" }
+                                $results += [PSCustomObject]@{
+                                    Type            = "History"
+                                    User            = $userName
+                                    Timestamp       = $displayTime + " EST"
+                                    Name            = if ($title) { $title } else { $url }
+                                    Value           = "Browser: $($browser.Name) | URL: $url"
+                                    SHA1            = "N/A"
+                                    SHA256          = "N/A"
+                                    RemediationType = "None"
+                                    RemediationPath = "N/A"
+                                }
+                            }
+                            $reader.Close()
+                            $conn.Close()
+                            $sqliteAvail = $true
+                        } catch { }
+
+                        if (-not $sqliteAvail) {
+                            # Fallback: parse SQLite page structure to extract readable URL strings
+                            # SQLite stores text as UTF-8 in B-tree leaf pages
+                            # We scan for http/https patterns with surrounding context
+                            $urlPattern = [regex]'https?://[^\x00-\x1F\x7F-\xFF ]{10,500}'
+                            $urlMatches = $urlPattern.Matches($dbText)
+                            $seenUrls = [System.Collections.Generic.HashSet[string]]::new()
+                            foreach ($m in $urlMatches) {
+                                $url = $m.Value.TrimEnd('`"' + "'" + '\,.')
+                                if (-not $seenUrls.Add($url)) { continue }
+                                # We can't get accurate timestamps in fallback mode - show as approximate
+                                $results += [PSCustomObject]@{
+                                    Type            = "History"
+                                    User            = $userName
+                                    Timestamp       = "Timestamp unavailable"
+                                    Name            = $url
+                                    Value           = "Browser: $($browser.Name) | URL: $url"
+                                    SHA1            = "N/A"
+                                    SHA256          = "N/A"
+                                    RemediationType = "None"
+                                    RemediationPath = "N/A"
+                                }
+                            }
+                        }
+
+                    } elseif ($browser.Type -eq "Firefox") {
+                        # Firefox places.sqlite - same SQLite fallback approach
+                        $dbBytes = [System.IO.File]::ReadAllBytes($tempHistory)
+                        $dbText  = [System.Text.Encoding]::UTF8.GetString($dbBytes)
+                        $urlPattern = [regex]'https?://[^\x00-\x1F\x7F-\xFF ]{10,500}'
+                        $urlMatches = $urlPattern.Matches($dbText)
+                        $seenUrls = [System.Collections.Generic.HashSet[string]]::new()
+                        foreach ($m in $urlMatches) {
+                            $url = $m.Value.TrimEnd('`"' + "'" + '\,.')
+                            if (-not $seenUrls.Add($url)) { continue }
+                            $results += [PSCustomObject]@{
+                                Type            = "History"
+                                User            = $userName
+                                Timestamp       = "Timestamp unavailable"
+                                Name            = $url
+                                Value           = "Browser: Firefox | URL: $url"
+                                SHA1            = "N/A"
+                                SHA256          = "N/A"
+                                RemediationType = "None"
+                                RemediationPath = "N/A"
+                            }
+                        }
+                    }
+                } catch { }
+                finally {
+                    Remove-Item $tempHistory -Force -ErrorAction SilentlyContinue
+                }
+            }
+        }
+    }
+
+    if ($results.Count -gt 0) {
+        Process-RemediationLoop -items $results -title "BROWSER FORENSICS RESULTS"
+    } else {
+        Write-Host "`n[-] No browser data found. Browsers may not be installed or profiles are inaccessible." -ForegroundColor Red
+        Pause
+    }
+}
+
+
 function Get-SystemInfo {
     Show-Banner
     $confirm = Read-Host " [?] Press ENTER to begin scan or Q to cancel"
@@ -2274,6 +2575,8 @@ function Show-Menu {
     Write-Host "  ---------------------------------------------------------------" -ForegroundColor DarkGray
     Write-Host "  [" -NoNewline -ForegroundColor White; Write-Host "10" -NoNewline -ForegroundColor Cyan; Write-Host "]  DFIR System Info" -ForegroundColor White
     Write-Host "       OS baseline, network config, local admins, AV posture" -ForegroundColor DarkGray
+    Write-Host "  [" -NoNewline -ForegroundColor White; Write-Host "11" -NoNewline -ForegroundColor Cyan; Write-Host "]  Browser Forensics" -ForegroundColor White
+    Write-Host "       Extensions and history across Chrome, Edge, Brave, Firefox" -ForegroundColor DarkGray
     Write-Host ""
     Write-Host "  ---------------------------------------------------------------" -ForegroundColor DarkGray
     Write-Host "  [Q]  Quit (returns to shell)" -ForegroundColor Red
@@ -2317,6 +2620,9 @@ function Show-Menu {
     }
     elseif ($choice -eq '10') {
         Get-SystemInfo
+    }
+    elseif ($choice -eq '11') {
+        Get-BrowserForensics
     }
     elseif ($choice -eq 'Q' -or $choice -eq 'q') {
         return $true
