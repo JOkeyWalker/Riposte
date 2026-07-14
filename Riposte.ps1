@@ -2247,7 +2247,6 @@ function Get-BrowserForensics {
     }
 
     Write-Host "[*] Scanning $($userRoots.Count) user profile(s)..." -ForegroundColor DarkGray
-    foreach ($ur in $userRoots) {
     foreach ($userRoot in $userRoots) {
         $userName = Split-Path $userRoot -Leaf
 
