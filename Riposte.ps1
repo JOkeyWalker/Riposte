@@ -2466,7 +2466,17 @@ LIMIT 5000
                                     # Skip URLs that end with plain text words (title bleed indicator)
                                     if ($url -match '(virustotal|welcome|search|home|upload|microsoft|google|bing)$' -and
                                         $url -notmatch '/(virustotal|welcome|search|home|upload)/?$') { continue }
+                                    # Normalise URL for deduplication:
+                                    # Strip common tracking/session params that create false duplicates
                                     $normUrl = $url.TrimEnd('/')
+                                    # Remove known noise query params from Bing/Edge/Google
+                                    $normUrl = [regex]::Replace($normUrl, '[?&](ntref|PC|FORM|cvi|cvid|gs_lcrp|pglt|sk|sc|pq|qs|esf|cs|OCID|form)=[^&]*', '')
+                                    $normUrl = $normUrl.TrimEnd('?&')
+                                    # For Bing searches, keep only the q= parameter as the canonical form
+                                    if ($normUrl -match 'bing\.com/search' -and $normUrl -match '[?&]q=([^&]+)') {
+                                        $normUrl = "https://www.bing.com/search?q=$($Matches[1])"
+                                        $url     = $normUrl
+                                    }
                                     if (-not $seenUrls.Add($normUrl)) { continue }
                                     $histRecords += [PSCustomObject]@{ Url = $url; Title = ""; VisitTime = $null }
                                 }
