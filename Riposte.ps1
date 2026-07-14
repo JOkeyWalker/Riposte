@@ -2011,6 +2011,15 @@ function Get-RunMRU {
     }
 }
 
+function Get-InstallDateFromPath {
+    param([string]$p)
+    if (-not $p) { return "Unknown" }
+    try {
+        $item = Get-Item -Path $p -ErrorAction Stop
+        return $item.CreationTime.ToString("yyyy-MM-dd HH:mm:ss")
+    } catch { return "Unknown" }
+}
+
 function Get-RMMHunt {
     Show-Banner
     Write-Host "===============================================================" -ForegroundColor DarkCyan
@@ -2063,16 +2072,6 @@ function Get-RMMHunt {
 
     foreach ($tool in $rmmTools) {
         $detections = @()
-
-        # Helper: get file creation time as a formatted string
-        function Get-InstallDateFromPath {
-            param([string]$p)
-            if (-not $p) { return "Unknown" }
-            try {
-                $item = Get-Item -Path $p -ErrorAction Stop
-                return $item.CreationTime.ToString("yyyy-MM-dd HH:mm:ss")
-            } catch { return "Unknown" }
-        }
 
         # 1. Running processes
         foreach ($exe in $tool.Exes) {
@@ -2221,16 +2220,9 @@ function Get-BrowserForensics {
 
     # EST timezone for display
     try {
-        $estZone = [System.TimeZoneInfo]::FindSystemTimeZoneById("Eastern Standard Time")
+        $script:estZone = [System.TimeZoneInfo]::FindSystemTimeZoneById("Eastern Standard Time")
     } catch {
-        $estZone = $null
-    }
-    function Convert-ToEST {
-        param([datetime]$dt)
-        if ($estZone) {
-            return [System.TimeZoneInfo]::ConvertTimeFromUtc($dt.ToUniversalTime(), $estZone)
-        }
-        return $dt
+        $script:estZone = $null
     }
 
     $results = @()
@@ -2492,20 +2484,11 @@ LIMIT 5000
                             }
                         }
 
-                        # Helper: validate a title string is real text (not binary bleed)
-                        function Test-ValidTitle {
-                            param([string]$t)
-                            if ($t.Length -lt 3) { return $false }
-                            # Must be at least 60% printable ASCII letters/spaces
-                            $printable = ($t.ToCharArray() | Where-Object { $_ -match '[a-zA-Z0-9 \-_:.,!?|()/]' }).Count
-                            return ($printable / $t.Length) -ge 0.6
-                        }
-
                         # Apply timeframe filter and build results
                         foreach ($rec in $histRecords) {
                             if ($rec.VisitTime) {
                                 if ($rec.VisitTime -lt $parsedTime.StartTime -or $rec.VisitTime -gt $parsedTime.EndTime) { continue }
-                                $displayTime = (Convert-ToEST -dt $rec.VisitTime).ToString("yyyy-MM-dd HH:mm:ss") + " EST"
+                                $displayTime = if ($script:estZone) { ([System.TimeZoneInfo]::ConvertTimeFromUtc($rec.VisitTime.ToUniversalTime(), $script:estZone)).ToString("yyyy-MM-dd HH:mm:ss") + " EST" } else { $rec.VisitTime.ToString("yyyy-MM-dd HH:mm:ss") }
                             } else {
                                 $displayTime = "Unavailable"
                             }
@@ -2513,7 +2496,10 @@ LIMIT 5000
                             # Validate title — drop if corrupt, empty, or just repeats the URL
                             $displayTitle = $rec.Title.Trim()
                             if ($displayTitle -eq $rec.Url) { $displayTitle = "" }
-                            if ($displayTitle -and -not (Test-ValidTitle -t $displayTitle)) { $displayTitle = "" }
+                            if ($displayTitle) {
+                                $printableCount = ($displayTitle.ToCharArray() | Where-Object { [char]::IsLetterOrDigit($_) -or $_ -in @(" ","-","_",":",".","," ,"!","?","|","(",")","/") }).Count
+                                if ($displayTitle.Length -lt 3 -or ($printableCount / $displayTitle.Length) -lt 0.6) { $displayTitle = "" }
+                            }
 
                             $results += [PSCustomObject]@{
                                 Type            = "History"
