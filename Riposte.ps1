@@ -2272,6 +2272,7 @@ function Get-BrowserForensics {
                 $profileDirs += Get-ChildItem $profileBase -Directory -ErrorAction SilentlyContinue |
                     ForEach-Object { $_.FullName }
             }
+            Write-Host "    Profile dirs found: $($profileDirs.Count) -> $($profileDirs -join ', ')" -ForegroundColor DarkGray
 
             foreach ($profileDir in $profileDirs) {
 
