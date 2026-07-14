@@ -2390,12 +2390,20 @@ function Get-BrowserForensics {
                 # -----------------------------------------------------------
                 if ($doHistory) {
                     $historyFile = "$profileDir\$($browser.HistoryFile)"
+                    Write-Host "    History file: $historyFile (exists: $(Test-Path $historyFile))" -ForegroundColor DarkGray
                     if (-not (Test-Path $historyFile)) { continue }
 
-                    $tempHistory = "$env:TEMP\riposte_hist_$([System.IO.Path]::GetRandomFileName()).db"
+                    # Use C:\Windows\Temp as fallback - more reliable than $env:TEMP in remote shells
+                    $tempDir = if (Test-Path "C:\Windows\Temp") { "C:\Windows\Temp" } else { $env:TEMP }
+                    $tempHistory = "$tempDir\riposte_hist_$([System.IO.Path]::GetRandomFileName()).db"
+                    Write-Host "    Copying to temp: $tempHistory" -ForegroundColor DarkGray
                     try {
                         Copy-Item $historyFile $tempHistory -Force -ErrorAction Stop
-                    } catch { continue }
+                        Write-Host "    Copy succeeded" -ForegroundColor DarkGray
+                    } catch {
+                        Write-Host "    Copy FAILED: $_" -ForegroundColor Red
+                        continue
+                    }
 
                     try {
                         $chromiumEpoch = [datetime]"1601-01-01 00:00:00"
@@ -2518,7 +2526,9 @@ LIMIT 5000
                             }
                         }
 
-                    } catch { }
+                    } catch {
+                        Write-Host "    History parse error: $_" -ForegroundColor Red
+                    }
                     finally {
                         Remove-Item $tempHistory -Force -ErrorAction SilentlyContinue
                     }
