@@ -2463,40 +2463,39 @@ LIMIT 5000
                             $urlPattern = [regex]'https?://[a-zA-Z0-9\-._~:/?#\[\]@!$&''()*+,;=%]{10,500}'
                             $seenUrls   = [System.Collections.Generic.HashSet[string]]::new()
 
+                            $rawMatchCount = 0
+                            $skipCount = 0
                             $urlPattern.Matches($dbText) | ForEach-Object {
+                                $rawMatchCount++
                                 $url = $_.Value
 
-                                # Strip any trailing garbage that bled in from adjacent SQLite data
-                                # Chromium stores title immediately after URL in some page layouts
-                                # Cut at first non-URL-safe printable sequence
+                                # Strip trailing garbage from adjacent SQLite data
                                 $url = [regex]::Match($url, '^https?://[a-zA-Z0-9\-._~:/?#\[\]@!$&''()*+,;=%]+').Value
 
-                                if ($url.Length -lt 10) { continue }
+                                if ($url.Length -lt 10) { $skipCount++; continue }
 
-                                # Skip internal browser/tracking URLs - not useful for SOC review
+                                # Skip only the noisiest internal/tracking URLs
                                 $skipUrl = $false
                                 foreach ($skipPat in @(
-                                    '^https?://[a-z0-9\-]+\.bing\.com/ck/',   # Bing redirect clicks
-                                    '^https?://[a-z0-9\-]+\.bing\.com/fd/',   # Bing telemetry
-                                    '^https?://edge\.microsoft\.com/newtabpage', # Edge new tab internal
-                                    '^https?://[a-z0-9\-]+\.msn\.com/.*ntp',  # MSN new tab
-                                    '^https?://[a-z0-9\-]+\.google\.com/gen_204', # Google ping
-                                    '^https?://[a-z0-9\-]+\.google\.com/url\?', # Google redirect
-                                    '^about:','^chrome:','^edge:','^moz-extension:'
+                                    '^https?://[a-z0-9\-]+\.bing\.com/ck/',     # Bing redirect clicks
+                                    '^https?://[a-z0-9\-]+\.bing\.com/fd/',     # Bing telemetry
+                                    '^https?://[a-z0-9\-]+\.google\.com/gen_204' # Google ping
                                 )) {
                                     if ($url -match $skipPat) { $skipUrl = $true; break }
                                 }
-                                if ($skipUrl) { continue }
+                                if ($skipUrl) { $skipCount++; continue }
 
-                                # Deduplicate by normalised URL (strip trailing slash, lowercase scheme+host)
+                                # Deduplicate by normalised URL
                                 $normUrl = $url.TrimEnd('/')
-                                if (-not $seenUrls.Add($normUrl)) { continue }
+                                if (-not $seenUrls.Add($normUrl)) { $skipCount++; continue }
 
                                 $histRecords += [PSCustomObject]@{ Url = $url; Title = ""; VisitTime = $null }
                             }
+                            Write-Host "    Binary parse: $rawMatchCount raw URLs, $skipCount skipped, $($histRecords.Count) kept" -ForegroundColor DarkGray
                         }
 
                         # Apply timeframe filter and build results
+                        Write-Host "    Total histRecords before filter: $($histRecords.Count)" -ForegroundColor DarkGray
                         foreach ($rec in $histRecords) {
                             if ($rec.VisitTime) {
                                 if ($rec.VisitTime -lt $parsedTime.StartTime -or $rec.VisitTime -gt $parsedTime.EndTime) { continue }
