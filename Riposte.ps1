@@ -2235,27 +2235,35 @@ function Get-BrowserForensics {
 
     $results = @()
 
-    # Browser profile definitions
-    $browsers = @(
-        @{ Name = "Google Chrome";   ProfileBase = "$env:LOCALAPPDATA\Google\Chrome\User Data";              HistoryFile = "History"; ExtFolder = "Extensions"; Type = "Chromium" },
-        @{ Name = "Microsoft Edge";  ProfileBase = "$env:LOCALAPPDATA\Microsoft\Edge\User Data";             HistoryFile = "History"; ExtFolder = "Extensions"; Type = "Chromium" },
-        @{ Name = "Brave";           ProfileBase = "$env:LOCALAPPDATA\BraveSoftware\Brave-Browser\User Data"; HistoryFile = "History"; ExtFolder = "Extensions"; Type = "Chromium" },
-        @{ Name = "Firefox";         ProfileBase = "$env:APPDATA\Mozilla\Firefox\Profiles";                  HistoryFile = "places.sqlite"; ExtFolder = "extensions"; Type = "Firefox" }
+    # Browser profile definitions — use static relative paths, not env vars
+    # This ensures we correctly scan ALL users even when running as a different admin account
+    $browserDefs = @(
+        @{ Name = "Google Chrome";   LocalPath = "Google\Chrome\User Data";              HistoryFile = "History";       ExtFolder = "Extensions"; Type = "Chromium" },
+        @{ Name = "Microsoft Edge";  LocalPath = "Microsoft\Edge\User Data";             HistoryFile = "History";       ExtFolder = "Extensions"; Type = "Chromium" },
+        @{ Name = "Brave";           LocalPath = "BraveSoftware\Brave-Browser\User Data"; HistoryFile = "History";      ExtFolder = "Extensions"; Type = "Chromium" },
+        @{ Name = "Firefox";         LocalPath = "Mozilla\Firefox\Profiles";             HistoryFile = "places.sqlite"; ExtFolder = "extensions"; Type = "Firefox"; Roaming = $true }
     )
 
     # Scan all user profiles on the device
-    $userRoots = @($env:USERPROFILE)
+    $userRoots = @()
     Get-ChildItem "C:\Users" -Directory -ErrorAction SilentlyContinue |
-        Where-Object { $_.Name -notmatch '^(Public|Default|Default User|All Users)$' -and $_.FullName -ne $env:USERPROFILE } |
+        Where-Object { $_.Name -notmatch '^(Public|Default|Default User|All Users|TEMP|systemprofile|LocalService|NetworkService)$' } |
         ForEach-Object { $userRoots += $_.FullName }
+
+    # Add current session user if not already included
+    if ($env:USERPROFILE -and ($userRoots -notcontains $env:USERPROFILE)) {
+        $userRoots += $env:USERPROFILE
+    }
+
+    Write-Host "[*] Scanning $($userRoots.Count) user profile(s)..." -ForegroundColor DarkGray
 
     foreach ($userRoot in $userRoots) {
         $userName = Split-Path $userRoot -Leaf
 
-        foreach ($browser in $browsers) {
-            $profileBase = $browser.ProfileBase `
-                -replace [regex]::Escape($env:LOCALAPPDATA), "$userRoot\AppData\Local" `
-                -replace [regex]::Escape($env:APPDATA),      "$userRoot\AppData\Roaming"
+        foreach ($browser in $browserDefs) {
+            # Build path directly from user root — no env var substitution needed
+            $appDataSub  = if ($browser.Roaming) { "AppData\Roaming" } else { "AppData\Local" }
+            $profileBase = "$userRoot\$appDataSub\$($browser.LocalPath)"
 
             if (-not (Test-Path $profileBase)) { continue }
 
