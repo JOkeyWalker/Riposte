@@ -2248,6 +2248,7 @@ function Get-BrowserForensics {
     }
 
     Write-Host "[*] Scanning $($userRoots.Count) user profile(s)..." -ForegroundColor DarkGray
+    foreach ($ur in $userRoots) { Write-Host "    Profile: $ur" -ForegroundColor DarkGray }
 
     foreach ($userRoot in $userRoots) {
         $userName = Split-Path $userRoot -Leaf
@@ -2257,7 +2258,9 @@ function Get-BrowserForensics {
             $appDataSub  = if ($browser.Roaming) { "AppData\Roaming" } else { "AppData\Local" }
             $profileBase = "$userRoot\$appDataSub\$($browser.LocalPath)"
 
+            Write-Host "    Checking: $profileBase" -ForegroundColor DarkGray
             if (-not (Test-Path $profileBase)) { continue }
+            Write-Host "    FOUND: $profileBase" -ForegroundColor Green
 
             # Collect profile directories
             $profileDirs = @()
