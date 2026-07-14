@@ -2453,46 +2453,32 @@ LIMIT 5000
                             } catch { }
                         }
 
-                        # Attempt 2: Binary fallback for Chromium and Firefox
+                        # Attempt 2: Binary fallback - scan file bytes for URL strings
                         if (-not $parsed) {
                             Write-Host "    Using binary fallback parser..." -ForegroundColor DarkGray
-                            $dbBytes = [System.IO.File]::ReadAllBytes($tempHistory)
-                            $dbText  = [System.Text.Encoding]::UTF8.GetString($dbBytes)
-
-                            # Strict URL pattern - terminated at null, space, or known noise chars
-                            # Excludes URLs that end with appended page title fragments
-                            $urlPattern = [regex]'https?://[a-zA-Z0-9\-._~:/?#\[\]@!$&''()*+,;=%]{10,500}'
-                            $seenUrls   = [System.Collections.Generic.HashSet[string]]::new()
-
-                            $rawMatchCount = 0
-                            $skipCount = 0
-                            $urlPattern.Matches($dbText) | ForEach-Object {
-                                $rawMatchCount++
-                                $url = $_.Value
-
-                                # Strip trailing garbage from adjacent SQLite data
-                                $url = [regex]::Match($url, '^https?://[a-zA-Z0-9\-._~:/?#\[\]@!$&''()*+,;=%]+').Value
-
-                                if ($url.Length -lt 10) { $skipCount++; continue }
-
-                                # Skip only the noisiest internal/tracking URLs
-                                $skipUrl = $false
-                                foreach ($skipPat in @(
-                                    '^https?://[a-z0-9\-]+\.bing\.com/ck/',     # Bing redirect clicks
-                                    '^https?://[a-z0-9\-]+\.bing\.com/fd/',     # Bing telemetry
-                                    '^https?://[a-z0-9\-]+\.google\.com/gen_204' # Google ping
-                                )) {
-                                    if ($url -match $skipPat) { $skipUrl = $true; break }
+                            try {
+                                $dbBytes = [System.IO.File]::ReadAllBytes($tempHistory)
+                                Write-Host "    File size: $($dbBytes.Length) bytes" -ForegroundColor DarkGray
+                                # Latin-1 encoding preserves all byte values unlike UTF-8 which throws on invalid sequences
+                                $dbText = [System.Text.Encoding]::GetEncoding(28591).GetString($dbBytes)
+                                $urlMatches = [regex]::Matches($dbText, 'https?://[a-zA-Z0-9\-._~:/?#@!$&()*+,;=%]{10,400}')
+                                Write-Host "    Raw URL matches: $($urlMatches.Count)" -ForegroundColor DarkGray
+                                $seenUrls = [System.Collections.Generic.HashSet[string]]::new()
+                                foreach ($m in $urlMatches) {
+                                    $url = $m.Value
+                                    # Clean trailing chars that bled from adjacent SQLite data
+                                    $url = [regex]::Match($url, '^https?://[a-zA-Z0-9\-._~:/?#@!$&()*+,;=%]+').Value
+                                    if ($url.Length -lt 12) { continue }
+                                    # Skip only Bing click redirects and Google pings
+                                    if ($url -match '/ck/a\?|/gen_204') { continue }
+                                    $normUrl = $url.TrimEnd('/')
+                                    if (-not $seenUrls.Add($normUrl)) { continue }
+                                    $histRecords += [PSCustomObject]@{ Url = $url; Title = ""; VisitTime = $null }
                                 }
-                                if ($skipUrl) { $skipCount++; continue }
-
-                                # Deduplicate by normalised URL
-                                $normUrl = $url.TrimEnd('/')
-                                if (-not $seenUrls.Add($normUrl)) { $skipCount++; continue }
-
-                                $histRecords += [PSCustomObject]@{ Url = $url; Title = ""; VisitTime = $null }
+                                Write-Host "    URLs after dedup/filter: $($histRecords.Count)" -ForegroundColor DarkGray
+                            } catch {
+                                Write-Host "    Binary parse error: $_" -ForegroundColor Red
                             }
-                            Write-Host "    Binary parse: $rawMatchCount raw URLs, $skipCount skipped, $($histRecords.Count) kept" -ForegroundColor DarkGray
                         }
 
                         # Apply timeframe filter and build results
