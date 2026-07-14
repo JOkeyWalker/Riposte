@@ -2455,6 +2455,7 @@ LIMIT 5000
 
                         # Attempt 2: Binary fallback for Chromium and Firefox
                         if (-not $parsed) {
+                            Write-Host "    Using binary fallback parser..." -ForegroundColor DarkGray
                             $dbBytes = [System.IO.File]::ReadAllBytes($tempHistory)
                             $dbText  = [System.Text.Encoding]::UTF8.GetString($dbBytes)
 
@@ -2525,6 +2526,7 @@ LIMIT 5000
                             }
                         }
 
+                        Write-Host "    Results added: $($results.Count)" -ForegroundColor DarkGray
                     } catch {
                         Write-Host "    History parse error: $_" -ForegroundColor Red
                     }
