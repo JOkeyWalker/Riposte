@@ -2343,7 +2343,7 @@ function Get-BrowserForensics {
                                         User            = $userName
                                         Timestamp       = "Installed: $installDate"
                                         Name            = "$extName (v$extVersion)"
-                                        Value           = "Browser: $($browser.Name) | Source: $source | Perms: $perms"
+                                        Value           = "Browser: $($browser.Name) | ID: $($extDir.Name) | Source: $source | Perms: $perms"
                                         SHA1            = "N/A"
                                         SHA256          = "N/A"
                                         RemediationType = "File"
@@ -2368,7 +2368,7 @@ function Get-BrowserForensics {
                                             User            = $userName
                                             Timestamp       = "Installed: $installDate"
                                             Name            = "$($addon.defaultLocale.name) (v$($addon.version))"
-                                            Value           = "Browser: Firefox | Source: $source | Perms: $perms"
+                                            Value           = "Browser: Firefox | ID: $($addon.id) | Source: $source | Perms: $perms"
                                             SHA1            = "N/A"
                                             SHA256          = "N/A"
                                             RemediationType = "File"
@@ -2441,36 +2441,56 @@ LIMIT 5000
                             } catch { }
                         }
 
-                        # Attempt 2: Parse binary directly for Chromium (no external dependencies)
-                        if (-not $parsed -and $browser.Type -eq "Chromium") {
+                        # Attempt 2: Binary fallback for Chromium and Firefox
+                        if (-not $parsed) {
                             $dbBytes = [System.IO.File]::ReadAllBytes($tempHistory)
                             $dbText  = [System.Text.Encoding]::UTF8.GetString($dbBytes)
-                            # Extract URL strings - they sit adjacently with title strings in SQLite pages
-                            # Pattern: look for http(s) strings followed closely by printable text (page title)
-                            $urlTitlePattern = [regex]'(https?://[^\x00-\x1F\x7F-\xFF ]{10,400})\x00{0,4}([^\x00-\x08\x0B-\x1F\x7F-\xFF]{3,100})?'
-                            $seenUrls = [System.Collections.Generic.HashSet[string]]::new()
-                            $urlTitlePattern.Matches($dbText) | ForEach-Object {
-                                $url   = $_.Groups[1].Value.TrimEnd('"`' + "'" + ',.')
-                                $title = $_.Groups[2].Value.Trim()
-                                if ($seenUrls.Add($url)) {
-                                    $histRecords += [PSCustomObject]@{ Url = $url; Title = $title; VisitTime = $null }
+
+                            # Strict URL pattern - terminated at null, space, or known noise chars
+                            # Excludes URLs that end with appended page title fragments
+                            $urlPattern = [regex]'https?://[a-zA-Z0-9\-._~:/?#\[\]@!$&''()*+,;=%]{10,500}'
+                            $seenUrls   = [System.Collections.Generic.HashSet[string]]::new()
+
+                            $urlPattern.Matches($dbText) | ForEach-Object {
+                                $url = $_.Value
+
+                                # Strip any trailing garbage that bled in from adjacent SQLite data
+                                # Chromium stores title immediately after URL in some page layouts
+                                # Cut at first non-URL-safe printable sequence
+                                $url = [regex]::Match($url, '^https?://[a-zA-Z0-9\-._~:/?#\[\]@!$&''()*+,;=%]+').Value
+
+                                if ($url.Length -lt 10) { continue }
+
+                                # Skip internal browser/tracking URLs - not useful for SOC review
+                                $skipUrl = $false
+                                foreach ($skipPat in @(
+                                    '^https?://[a-z0-9\-]+\.bing\.com/ck/',   # Bing redirect clicks
+                                    '^https?://[a-z0-9\-]+\.bing\.com/fd/',   # Bing telemetry
+                                    '^https?://edge\.microsoft\.com/newtabpage', # Edge new tab internal
+                                    '^https?://[a-z0-9\-]+\.msn\.com/.*ntp',  # MSN new tab
+                                    '^https?://[a-z0-9\-]+\.google\.com/gen_204', # Google ping
+                                    '^https?://[a-z0-9\-]+\.google\.com/url\?', # Google redirect
+                                    '^about:','^chrome:','^edge:','^moz-extension:'
+                                )) {
+                                    if ($url -match $skipPat) { $skipUrl = $true; break }
                                 }
+                                if ($skipUrl) { continue }
+
+                                # Deduplicate by normalised URL (strip trailing slash, lowercase scheme+host)
+                                $normUrl = $url.TrimEnd('/')
+                                if (-not $seenUrls.Add($normUrl)) { continue }
+
+                                $histRecords += [PSCustomObject]@{ Url = $url; Title = ""; VisitTime = $null }
                             }
-                            $parsed = $true
                         }
 
-                        # Attempt 2b: Firefox binary fallback
-                        if (-not $parsed -and $browser.Type -eq "Firefox") {
-                            $dbBytes = [System.IO.File]::ReadAllBytes($tempHistory)
-                            $dbText  = [System.Text.Encoding]::UTF8.GetString($dbBytes)
-                            $urlPattern = [regex]'https?://[^\x00-\x1F\x7F-\xFF ]{10,400}'
-                            $seenUrls = [System.Collections.Generic.HashSet[string]]::new()
-                            $urlPattern.Matches($dbText) | ForEach-Object {
-                                $url = $_.Value.TrimEnd('"`' + "'" + ',.')
-                                if ($seenUrls.Add($url)) {
-                                    $histRecords += [PSCustomObject]@{ Url = $url; Title = ""; VisitTime = $null }
-                                }
-                            }
+                        # Helper: validate a title string is real text (not binary bleed)
+                        function Test-ValidTitle {
+                            param([string]$t)
+                            if ($t.Length -lt 3) { return $false }
+                            # Must be at least 60% printable ASCII letters/spaces
+                            $printable = ($t.ToCharArray() | Where-Object { $_ -match '[a-zA-Z0-9 \-_:.,!?|()/]' }).Count
+                            return ($printable / $t.Length) -ge 0.6
                         }
 
                         # Apply timeframe filter and build results
@@ -2482,9 +2502,10 @@ LIMIT 5000
                                 $displayTime = "Unavailable"
                             }
 
-                            # Clean up title — skip if it's empty, just the URL, or noise
+                            # Validate title — drop if corrupt, empty, or just repeats the URL
                             $displayTitle = $rec.Title.Trim()
-                            if ($displayTitle -eq $rec.Url -or $displayTitle.Length -lt 2) { $displayTitle = "" }
+                            if ($displayTitle -eq $rec.Url) { $displayTitle = "" }
+                            if ($displayTitle -and -not (Test-ValidTitle -t $displayTitle)) { $displayTitle = "" }
 
                             $results += [PSCustomObject]@{
                                 Type            = "History"
