@@ -2178,6 +2178,222 @@ function Get-RMMHunt {
     }
 }
 
+function Get-BrowserNotifications {
+    Show-Banner
+    Write-Host "===============================================================" -ForegroundColor DarkCyan
+    Write-Host "  BROWSER NOTIFICATION PERMISSIONS" -ForegroundColor Yellow
+    Write-Host "  Scanning for scareware / spam notification origins" -ForegroundColor DarkGray
+    Write-Host "===============================================================" -ForegroundColor DarkCyan
+    Write-Host "[*] Scanning browser profiles..." -ForegroundColor Yellow
+
+    $results = @()
+
+    $browserDefs = @(
+        @{ Name = "Google Chrome";  LocalPath = "Google\Chrome\User Data";               Type = "Chromium" },
+        @{ Name = "Microsoft Edge"; LocalPath = "Microsoft\Edge\User Data";              Type = "Chromium" },
+        @{ Name = "Brave";          LocalPath = "BraveSoftware\Brave-Browser\User Data"; Type = "Chromium" },
+        @{ Name = "Firefox";        LocalPath = "Mozilla\Firefox\Profiles";              Type = "Firefox"; Roaming = $true }
+    )
+
+    $userRoots = @()
+    Get-ChildItem "C:\Users" -Directory -ErrorAction SilentlyContinue |
+        Where-Object { $_.Name -notmatch '^(Public|Default|Default User|All Users|TEMP|systemprofile|LocalService|NetworkService)$' } |
+        ForEach-Object { $userRoots += $_.FullName }
+    if ($env:USERPROFILE -and ($userRoots -notcontains $env:USERPROFILE)) { $userRoots += $env:USERPROFILE }
+
+    foreach ($userRoot in $userRoots) {
+        $userName = Split-Path $userRoot -Leaf
+
+        foreach ($browser in $browserDefs) {
+            $appDataSub  = if ($browser.ContainsKey('Roaming') -and $browser.Roaming) { "AppData\Roaming" } else { "AppData\Local" }
+            $profileBase = "$userRoot\$appDataSub\$($browser.LocalPath)"
+            if (-not (Test-Path $profileBase)) { continue }
+
+            # Collect profile directories
+            $profileDirs = @()
+            if ($browser.Type -eq "Chromium") {
+                if (Test-Path "$profileBase\Default") { $profileDirs += "$profileBase\Default" }
+                $profileDirs += Get-ChildItem $profileBase -Directory -ErrorAction SilentlyContinue |
+                    Where-Object { $_.Name -match '^Profile \d+$' } | ForEach-Object { $_.FullName }
+            } else {
+                $profileDirs += Get-ChildItem $profileBase -Directory -ErrorAction SilentlyContinue |
+                    ForEach-Object { $_.FullName }
+            }
+
+            foreach ($profileDir in $profileDirs) {
+
+                if ($browser.Type -eq "Chromium") {
+                    $prefsFile = "$profileDir\Preferences"
+                    if (-not (Test-Path $prefsFile)) { continue }
+                    try {
+                        $prefs = Get-Content $prefsFile -Raw -ErrorAction Stop | ConvertFrom-Json
+                        $notifSection = $prefs.profile.content_settings.exceptions.notifications
+                        if (-not $notifSection) { continue }
+
+                        foreach ($prop in $notifSection.PSObject.Properties) {
+                            $origin  = $prop.Name -replace ',\d+$', ''  # strip Chrome's ",1" suffix
+                            $setting = $prop.Value.setting
+
+                            # 1 = Allow, 2 = Block, 3 = Ask — we only care about Allow
+                            if ($setting -ne 1) { continue }
+
+                            # Flag suspicious origins
+                            $suspicious = $false
+                            $reason = ""
+                            if ($origin -match '^https?://\d+\.\d+\.\d+\.\d+') { $suspicious = $true; $reason = "IP address origin" }
+                            elseif ($origin -notmatch '^https://') { $suspicious = $true; $reason = "Non-HTTPS origin" }
+                            elseif ($origin -match '[a-z0-9]{12,}\.(xyz|top|click|surf|buzz|gq|tk|ml|cf|ga|icu|cyou|life)') { $suspicious = $true; $reason = "Suspicious TLD / random domain" }
+                            elseif ($origin -match 'push|notify|alert|news|update|win|prize|reward|free|click') { $suspicious = $true; $reason = "Scareware keyword in domain" }
+
+                            $results += [PSCustomObject]@{
+                                Type            = "Notification: $($browser.Name)"
+                                User            = $userName
+                                Timestamp       = if ($suspicious) { "SUSPICIOUS: $reason" } else { "Allowed" }
+                                Name            = $origin
+                                Value           = "Browser: $($browser.Name) | Profile: $(Split-Path $profileDir -Leaf) | Status: Allowed"
+                                SHA1            = "N/A"
+                                SHA256          = "N/A"
+                                RemediationType = "ChromiumNotification"
+                                RemediationPath = "$prefsFile|$($prop.Name)"
+                            }
+                        }
+                    } catch { continue }
+
+                } elseif ($browser.Type -eq "Firefox") {
+                    # Firefox stores permissions in permissions.sqlite
+                    $permDb = "$profileDir\permissions.sqlite"
+                    if (-not (Test-Path $permDb)) { continue }
+
+                    $tempDb = "$env:TEMP\riposte_perm_$([System.IO.Path]::GetRandomFileName()).db"
+                    try {
+                        Copy-Item $permDb $tempDb -Force -ErrorAction Stop
+                        $dbBytes = [System.IO.File]::ReadAllBytes($tempDb)
+                        $dbText  = [System.Text.Encoding]::GetEncoding(28591).GetString($dbBytes)
+                        # Extract https:// origins from the binary
+                        $originMatches = [regex]::Matches($dbText, 'https?://[a-zA-Z0-9\-._]{4,100}')
+                        $seen = [System.Collections.Generic.HashSet[string]]::new()
+                        foreach ($m in $originMatches) {
+                            $origin = $m.Value.TrimEnd('/')
+                            if (-not $seen.Add($origin)) { continue }
+                            if ($origin -match 'mozilla|firefox|google|microsoft|apple|amazon') { continue }
+
+                            $suspicious = $false
+                            $reason = ""
+                            if ($origin -notmatch '^https://') { $suspicious = $true; $reason = "Non-HTTPS" }
+                            elseif ($origin -match 'push|notify|alert|news|update|win|prize|reward|free|click') { $suspicious = $true; $reason = "Scareware keyword" }
+
+                            $results += [PSCustomObject]@{
+                                Type            = "Notification: Firefox"
+                                User            = $userName
+                                Timestamp       = if ($suspicious) { "SUSPICIOUS: $reason" } else { "Allowed" }
+                                Name            = $origin
+                                Value           = "Browser: Firefox | Profile: $(Split-Path $profileDir -Leaf) | Status: Allowed"
+                                SHA1            = "N/A"
+                                SHA256          = "N/A"
+                                RemediationType = "FirefoxNotification"
+                                RemediationPath = "$permDb|$origin"
+                            }
+                        }
+                    } catch { }
+                    finally { Remove-Item $tempDb -Force -ErrorAction SilentlyContinue }
+                }
+            }
+        }
+    }
+
+    if ($results.Count -eq 0) {
+        Write-Host "`n[+] No browser notification permissions found." -ForegroundColor Green
+        Pause
+        return
+    }
+
+    # Use custom loop instead of Process-RemediationLoop since remediation is unique here
+    $loop = $true
+    while ($loop) {
+        Show-Banner
+        Write-Host "===============================================================" -ForegroundColor DarkCyan
+        Write-Host "  BROWSER NOTIFICATION PERMISSIONS" -ForegroundColor Yellow
+        Write-Host "  Total: $($results.Count) allowed origin(s) found" -ForegroundColor DarkGray
+        Write-Host "===============================================================" -ForegroundColor DarkCyan
+        Write-Host ""
+
+        $index = 1
+        foreach ($r in $results) {
+            $flagColor = if ($r.Timestamp -match "SUSPICIOUS") { "Red" } else { "White" }
+            Write-Host "  [$index] " -NoNewline -ForegroundColor Cyan
+            Write-Host "$($r.Name)" -ForegroundColor $flagColor
+            Write-Host "       Browser : $($r.User) / $($r.Type -replace 'Notification: ','')" -ForegroundColor DarkGray
+            Write-Host "       Status  : $($r.Timestamp)" -ForegroundColor $flagColor
+            Write-Host ""
+            $r | Add-Member -MemberType NoteProperty -Name MenuIndex -Value $index -Force
+            $index++
+        }
+
+        Write-Host "---------------------------------------------------------------" -ForegroundColor DarkCyan
+        Write-Host "  Enter number(s) to REMOVE (e.g. 1,3) | [R] Return to Menu" -ForegroundColor Cyan
+        Write-Host "---------------------------------------------------------------" -ForegroundColor DarkCyan
+        $choice = Read-Host " [+] Select Option"
+
+        if ($choice -eq 'R' -or $choice -eq 'r' -or -not $choice) { $loop = $false; return }
+
+        $choices = $choice -split '[,\s;]+' | Where-Object { $_ -match '^\d+$' } | ForEach-Object { [int]$_ }
+        if ($choices.Count -eq 0) { Write-Host "[-] Invalid." -ForegroundColor Red; Start-Sleep -Seconds 1; continue }
+
+        $removed = @()
+        foreach ($c in $choices) {
+            $item = $results | Where-Object { $_.MenuIndex -eq $c }
+            if (-not $item) { Write-Host "[-] Index [$c] not found." -ForegroundColor Red; continue }
+
+            Write-Host ""
+            Write-Host "  [!] Remove notification permission for: $($item.Name)" -ForegroundColor Yellow
+            $confirm = Read-Host "  [?] Confirm? (Y/N)"
+            if ($confirm -ne 'Y' -and $confirm -ne 'y') { Write-Host "  [-] Skipped." -ForegroundColor DarkGray; continue }
+
+            $parts = $item.RemediationPath -split '\|', 2
+            $filePath = $parts[0]
+            $key      = $parts[1]
+
+            if ($item.RemediationType -eq "ChromiumNotification") {
+                # Check if browser is running - warn but allow
+                $browserProc = Get-Process | Where-Object { $_.MainWindowTitle -or $_.Name -match 'chrome|msedge|brave' } | Select-Object -First 1
+                if ($browserProc) {
+                    Write-Host "  [!] WARNING: Browser may be running. Close it for changes to persist." -ForegroundColor Yellow
+                }
+                try {
+                    $prefsRaw = Get-Content $filePath -Raw -ErrorAction Stop
+                    $prefs    = $prefsRaw | ConvertFrom-Json
+
+                    # Remove the notification entry
+                    $notifSection = $prefs.profile.content_settings.exceptions.notifications
+                    $notifSection.PSObject.Properties.Remove($key)
+
+                    # Save back - use raw string replacement to preserve JSON structure
+                    $newJson = $prefs | ConvertTo-Json -Depth 100 -Compress
+                    [System.IO.File]::WriteAllText($filePath, $newJson)
+                    Write-Host "  [+] Removed: $($item.Name)" -ForegroundColor Green
+                    $removed += $c
+                } catch {
+                    Write-Host "  [!] Failed: $_" -ForegroundColor Red
+                    Write-Host "      If browser is open, close it first and try again." -ForegroundColor DarkGray
+                }
+            } elseif ($item.RemediationType -eq "FirefoxNotification") {
+                Write-Host "  [-] Firefox notification removal requires the browser to be closed." -ForegroundColor Yellow
+                Write-Host "      Manual steps: Firefox > Settings > Privacy & Security > Notifications > Remove $($item.Name)" -ForegroundColor DarkGray
+            }
+        }
+
+        if ($removed.Count -gt 0) {
+            $results = $results | Where-Object { $_.MenuIndex -notin $removed }
+            if ($results.Count -eq 0) {
+                Write-Host "`n[+] All notification permissions removed." -ForegroundColor Green
+                Pause
+                $loop = $false
+            }
+        }
+    }
+}
+
+
 function Get-BrowserForensics {
     Show-Banner
     Write-Host "===============================================================" -ForegroundColor DarkCyan
@@ -2189,13 +2405,21 @@ function Get-BrowserForensics {
     Write-Host "       Name, version, source, permissions, install date" -ForegroundColor DarkGray
     Write-Host "  [" -NoNewline -ForegroundColor White; Write-Host "2" -NoNewline -ForegroundColor Cyan; Write-Host "]  Browser History" -ForegroundColor White
     Write-Host "       URLs, page titles, timestamps (EST)" -ForegroundColor DarkGray
+    Write-Host "  [" -NoNewline -ForegroundColor White; Write-Host "3" -NoNewline -ForegroundColor Cyan; Write-Host "]  Notification Permissions" -ForegroundColor White
+    Write-Host "       Detect and remove scareware/spam notification origins" -ForegroundColor DarkGray
     Write-Host ""
 
     $subChoice = Read-Host " [?] Select an option (or Q to cancel)"
     if ($subChoice -eq 'Q' -or $subChoice -eq 'q') { return }
-    if ($subChoice -notin @('1','2')) {
+    if ($subChoice -notin @('1','2','3')) {
         Write-Host "[-] Invalid selection." -ForegroundColor Red
         Start-Sleep -Seconds 1
+        return
+    }
+
+    # Notification scan - handled separately, no further shared setup needed
+    if ($subChoice -eq '3') {
+        Get-BrowserNotifications
         return
     }
 
