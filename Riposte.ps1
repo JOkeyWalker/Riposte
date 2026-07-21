@@ -41,6 +41,25 @@ function Pause {
     $null = Read-Host
 }
 
+function Repair-Input {
+    param([string]$raw)
+    # Process backspace characters that remote shells pass as literals
+    # Simulates what a real terminal would do when backspace is pressed
+    if (-not $raw) { return $raw }
+    $chars = [System.Collections.Generic.List[char]]::new()
+    foreach ($c in $raw.ToCharArray()) {
+        if ([int]$c -eq 8 -or $c -eq "`b") {
+            # Backspace - remove last character if any
+            if ($chars.Count -gt 0) { $chars.RemoveAt($chars.Count - 1) }
+        } elseif ([int]$c -ge 32 -or $c -eq "`t") {
+            # Printable character
+            $chars.Add($c)
+        }
+        # Skip other control characters
+    }
+    return -join $chars
+}
+
 function Resolve-SidToUsername {
     param([string]$sid)
     if ($sid -eq "S-1-5-18") { return "NT AUTHORITY\SYSTEM" }
@@ -620,7 +639,7 @@ function Process-RemediationLoop {
         }
         Write-Host "  Remediation: Enter number(s) (e.g., 1,3,5) | [R] Return to Menu" -ForegroundColor Cyan
         Write-Host "---------------------------------------------------------------" -ForegroundColor DarkCyan
-        $remedChoice = Read-Host " [+] Select Option"
+        $remedChoice = Repair-Input (Read-Host " [+] Select Option")
         
         if ($remedChoice -eq 'R' -or $remedChoice -eq 'r' -or -not $remedChoice) {
             $loop = $false
@@ -839,11 +858,11 @@ function Search-GlobalKeyword {
     Write-Host " [+] Enter keyword(s) to hunt for." -ForegroundColor Cyan
     Write-Host "     Single  : OneBrowser" -ForegroundColor DarkGray
     Write-Host "     Multiple: OneBrowser, OB, KitchenCanvas" -ForegroundColor DarkGray
-    $keywordInput = Read-Host " [?] (or Q to cancel)"
+    $keywordInput = Repair-Input (Read-Host " [?] (or Q to cancel)")
     if ($keywordInput -eq 'Q' -or $keywordInput -eq 'q') { return }
     
     Write-Host " [+] Enter directory path to restrict file search" -ForegroundColor Gray
-    $pathInput = Read-Host "     (Leave blank to scan HIGH-VALUE TRIAGE areas: Users, ProgramData, Temp)"
+    $pathInput = Repair-Input (Read-Host "     (Leave blank to scan HIGH-VALUE TRIAGE areas: Users, ProgramData, Temp)")
     
     $parsedKeywords = Parse-Keywords -inputString $keywordInput
     if ($parsedKeywords.Count -eq 0) {
@@ -1553,7 +1572,7 @@ function Get-PSHistory {
     Write-Host "       6/4/2026 11:30 to 6/5/2026 6:30" -ForegroundColor DarkGray
     Write-Host ""
     
-    $timeInput = Read-Host " [?] Enter timeframe (or Q to cancel)"
+    $timeInput = Repair-Input (Read-Host " [?] Enter timeframe (or Q to cancel)")
     if ($timeInput -eq 'Q' -or $timeInput -eq 'q') { return }
     if (-not $timeInput) {
         Write-Host "[-] No input provided. Defaulting to past 1 hour." -ForegroundColor Red
@@ -1847,7 +1866,7 @@ function Get-RecentlyWrittenFiles {
     Write-Host "===============================================================" -ForegroundColor DarkCyan
     Write-Host " [+] Enter Timeframe to check for recently written files:" -ForegroundColor Cyan
     Write-Host "     Examples: '30m' (30 mins), '1h' (1 hour), '2h' (2 hours), '1d' (1 day)" -ForegroundColor DarkGray
-    $timeInput = Read-Host "Q to cancel or  [?]"
+    $timeInput = Repair-Input (Read-Host "Q to cancel or  [?]")
     if ($timeInput -eq 'Q' -or $timeInput -eq 'q') { return }
     
     if (-not $timeInput) {
@@ -2439,7 +2458,7 @@ function Get-BrowserForensics {
     if ($doHistory) {
         Write-Host ""
         Write-Host "  Timeframe examples: 30m, 1h, 6h, 1d, 7d" -ForegroundColor DarkGray
-        $timeInput = Read-Host " [?] Enter history timeframe"
+        $timeInput = Repair-Input (Read-Host " [?] Enter history timeframe")
         if ($timeInput -eq 'Q' -or $timeInput -eq 'q') { return }
         if (-not $timeInput) { $timeInput = "24h" }
         $parsedTime = Parse-Timeframe -inputString $timeInput
@@ -2889,7 +2908,7 @@ function Show-Menu {
     Write-Host "  ---------------------------------------------------------------" -ForegroundColor DarkGray
     Write-Host ""
     
-    $choice = Read-Host " [?] Select an option"
+    $choice = Repair-Input (Read-Host " [?] Select an option")
     
     if ($choice -eq '1') {
         $data = Get-Persistence
