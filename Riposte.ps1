@@ -1044,6 +1044,8 @@ function Invoke-GlobalHunt {
     )
 
     Write-Host "[*] Scanning File System (Names only)..." -ForegroundColor Yellow
+    $script:fsFileCount = 0
+    $script:fsMatchCount = 0
 
     # Build deduplicated keyword filter list once (strips wildcards, removes dupes, skips too-short)
     $cleanKeywords = @()
@@ -1067,6 +1069,10 @@ function Invoke-GlobalHunt {
 
             # Collect all files in this directory once, then test against all keywords
             $allFiles = Get-ChildItem -Path $currentPath -File -Force -ErrorAction SilentlyContinue
+            $script:fsFileCount += $allFiles.Count
+            if ($script:fsFileCount -gt 0 -and ($script:fsFileCount % 1000) -lt $allFiles.Count) {
+                Write-Host "[*] File scan: $($script:fsFileCount) files scanned, $($script:fsMatchCount) matches..." -ForegroundColor DarkGray
+            }
             foreach ($file in $allFiles) {
                 # Skip already-seen paths (prevents duplicate results when multiple keywords match)
                 if (-not $seenFilePaths.Add($file.FullName)) { continue }
@@ -1083,6 +1089,7 @@ function Invoke-GlobalHunt {
 
                 $associatedUser = Get-AssociatedUser -path $file.FullName
                 $hashes = Get-FileHashes -filePath $file.FullName
+                $script:fsMatchCount++
                 $globalResults += [PSCustomObject]@{
                     Type            = "File Name Match"
                     User            = $associatedUser
@@ -1183,6 +1190,7 @@ function Invoke-GlobalHunt {
             if ($eventIDs.Count -gt 0) { $filter['Id'] = $eventIDs }
 
             $events = Get-WinEvent -FilterHashtable $filter -MaxEvents 5000 -ErrorAction Stop
+            Write-Host "[*] $($logName -replace 'Microsoft-Windows-','' -replace '/Operational',''): $($events.Count) events to check..." -ForegroundColor DarkGray
 
             foreach ($evt in $events) {
                 # Render full event message and check against keywords
