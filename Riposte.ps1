@@ -1728,63 +1728,135 @@ function Get-PSHistory {
     }
 }
 
-function Get-ProcessTriage {
+function Get-EventLogSearch {
     Show-Banner
     Write-Host "===============================================================" -ForegroundColor DarkCyan
-    Write-Host "  PROCESS TRIAGE & EXECUTION HUNT" -ForegroundColor Yellow
+    Write-Host "  BROAD EVENT LOG SEARCH" -ForegroundColor Yellow
+    Write-Host "  Logons, services, RDP, tasks, software, PowerShell" -ForegroundColor DarkGray
     Write-Host "===============================================================" -ForegroundColor DarkCyan
-    $confirm = Read-Host " [?] Press ENTER to begin scan or Q to cancel"
-    if ($confirm -eq 'Q' -or $confirm -eq 'q') { return }
-    Write-Host "[*] Scanning running processes for anomalies..." -ForegroundColor Yellow
-    
-    $results = @()
-    try {
-        $processes = Get-CimInstance Win32_Process
-        foreach ($proc in $processes) {
-            try {
-                $path = $proc.ExecutablePath
-                if (-not $path) { continue }
-                
-                $isAnomalous = $false
-                if ($path -match "C:\\Users\\|C:\\ProgramData\\|C:\\Temp\\|C:\\Windows\\Temp\\") {
-                    $isAnomalous = $true
-                }
-                elseif ($proc.Name -match "powershell|cmd\.exe|wscript|cscript|mshta|rundll32|regsvr32") {
-                    $isAnomalous = $true
-                }
-                
-                if ($isAnomalous) {
-                    $owner = Get-AssociatedUser -path $path
-                    $hashes = Get-FileHashes -filePath $path
-                    
-                    $sigStatus = "Unsigned"
-                    $sig = Get-AuthenticodeSignature -FilePath $path -ErrorAction SilentlyContinue
-                    if ($sig -and $sig.Status -eq "Valid") {
-                        $sigStatus = "Signed ($($sig.SignerCertificate.Subject))"
-                    }
+    Write-Host ""
+    Write-Host "  Timeframe examples: 30m, 1h, 6h, 1d, 7d, or date ranges" -ForegroundColor DarkGray
+    $timeInput = Repair-Input (Read-Host " [?] Enter timeframe (or Q to cancel)")
+    if ($timeInput -eq 'Q' -or $timeInput -eq 'q') { return }
+    if (-not $timeInput) { $timeInput = "24h" }
 
-                    $results += [PSCustomObject]@{
-                        Type            = "Anomalous Running Process"
-                        User            = $owner
-                        Timestamp       = "PID: $($proc.ProcessId) | Signature: $sigStatus"
-                        Name            = $proc.Name
-                        Value           = $proc.CommandLine
-                        SHA1            = $hashes.SHA1
-                        SHA256          = $hashes.SHA256
-                        RemediationType = "Process"
-                        RemediationPath = $proc.ProcessId
-                    }
+    $parsedTime = Parse-Timeframe -inputString $timeInput
+    if (-not $parsedTime -or -not $parsedTime.StartTime) {
+        Write-Host "[-] Invalid timeframe. Defaulting to last 24 hours." -ForegroundColor Yellow
+        $parsedTime = @{ StartTime = (Get-Date).AddHours(-24); EndTime = Get-Date }
+    }
+
+    Write-Host ""
+    Write-Host "  Enter keyword(s) to search event messages." -ForegroundColor DarkGray
+    Write-Host "     Single  : ScreenConnect" -ForegroundColor DarkGray
+    Write-Host "     Multiple: ScreenConnect, bob.smith, AnyDesk" -ForegroundColor DarkGray
+    $keywordInput = Repair-Input (Read-Host " [?] Keywords (or Q to cancel)")
+    if ($keywordInput -eq 'Q' -or $keywordInput -eq 'q') { return }
+
+    $keywords = Parse-Keywords -inputString $keywordInput
+    if ($keywords.Count -eq 0) {
+        Write-Host "[-] No keywords entered." -ForegroundColor Red
+        Pause
+        return
+    }
+
+    # Build regex pattern from keywords
+    $regexPatterns = @()
+    foreach ($kw in $keywords) { $regexPatterns += Convert-WildcardToRegex -pattern $kw }
+    $regexPattern = "(" + ($regexPatterns -join '|') + ")"
+
+    Write-Host ""
+    Write-Host "[*] Searching event logs from $($parsedTime.StartTime.ToString('yyyy-MM-dd HH:mm:ss')) to $($parsedTime.EndTime.ToString('yyyy-MM-dd HH:mm:ss'))..." -ForegroundColor Yellow
+
+    $results = @()
+    $huntStartTime = Get-Date
+
+    # Event log targets with friendly descriptions
+    $eventLogTargets = @(
+        @{ Log = "Security"; IDs = @(4624, 4625, 4634, 4647, 4648, 4672, 4673, 4688, 4698, 4702, 4720, 4722, 4724, 4726, 4732, 4740, 4756) },
+        @{ Log = "System";   IDs = @(7045, 7036, 7040, 104) },
+        @{ Log = "Application"; IDs = @() },
+        @{ Log = "Microsoft-Windows-TerminalServices-LocalSessionManager/Operational"; IDs = @(21, 23, 24, 25) },
+        @{ Log = "Microsoft-Windows-TaskScheduler/Operational"; IDs = @(106, 140, 141, 200, 201) },
+        @{ Log = "Microsoft-Windows-PowerShell/Operational"; IDs = @(4104) },
+        @{ Log = "Microsoft-Windows-Sysmon/Operational"; IDs = @(1, 3, 7, 11, 12, 13) }
+    )
+
+    $eventDesc = @{
+        4624 = "Logon Success";          4625 = "Logon Failure";           4634 = "Logoff"
+        4647 = "User Initiated Logoff";  4648 = "Explicit Logon";          4672 = "Privileged Logon"
+        4673 = "Privileged Service";     4688 = "Process Created";         4698 = "Scheduled Task Created"
+        4702 = "Scheduled Task Updated"; 4720 = "Account Created";         4722 = "Account Enabled"
+        4724 = "Password Reset";         4726 = "Account Deleted";         4732 = "Added to Group"
+        4740 = "Account Locked Out";     4756 = "Added to Global Group"
+        7045 = "New Service Installed";  7036 = "Service State Change";    7040 = "Service Start Type Changed"
+        104  = "Event Log Cleared"
+        21   = "RDP Session Logon";      23   = "RDP Session Logoff";      24   = "RDP Session Disconnect"
+        25   = "RDP Session Reconnect"
+        106  = "Task Registered";        140  = "Task Not Started";        141  = "Task Removed"
+        200  = "Task Action Started";    201  = "Task Action Completed"
+        4104 = "PS Script Block"
+        1    = "Sysmon Process Create";  3    = "Sysmon Network Connect";  7    = "Sysmon Image Load"
+        11   = "Sysmon File Created";    12   = "Sysmon Registry Create";  13   = "Sysmon Registry Set"
+    }
+
+    foreach ($target in $eventLogTargets) {
+        $logName = $target.Log
+        $logExists = Get-WinEvent -ListLog $logName -ErrorAction SilentlyContinue
+        if (-not $logExists) { continue }
+
+        $shortLog = $logName -replace 'Microsoft-Windows-','' -replace '/Operational','' -replace '/Admin',''
+        Write-Host "[*] Scanning $shortLog..." -ForegroundColor DarkGray
+
+        try {
+            $filter = @{ LogName = $logName; StartTime = $parsedTime.StartTime; EndTime = $parsedTime.EndTime }
+            if ($target.IDs.Count -gt 0) { $filter['Id'] = $target.IDs }
+
+            $events = Get-WinEvent -FilterHashtable $filter -MaxEvents 10000 -ErrorAction Stop
+
+            foreach ($evt in $events) {
+                if ($evt.TimeCreated -ge $huntStartTime) { continue }
+
+                $msg = try { $evt.Message } catch { "" }
+                if (-not $msg) { $msg = ($evt.Properties | ForEach-Object { $_.Value }) -join " " }
+                if (-not ($msg -match $regexPattern)) { continue }
+
+                # Resolve user
+                $evtUser = "N/A"
+                if ($evt.UserId) {
+                    $evtUser = Resolve-SidToUsername -sid $evt.UserId.ToString()
+                } elseif ($msg -match '(?i)Account Name:\s+(\S+)') {
+                    $evtUser = $Matches[1]
+                } elseif ($msg -match '(?i)User Name:\s+(\S+)') {
+                    $evtUser = $Matches[1]
                 }
-            } catch {}
-        }
-    } catch {
-        Write-Host "[-] Error scanning running processes: $_" -ForegroundColor Red
+                if ($evtUser -match "(?i)SentinelRSHUser|SentinelOne") { continue }
+
+                $friendlyDesc = if ($eventDesc.ContainsKey($evt.Id)) { $eventDesc[$evt.Id] } else { "Event ID $($evt.Id)" }
+
+                # Extract the matching line from the message
+                $matchLine = ($msg -split "`n" | Where-Object { $_ -match $regexPattern } | Select-Object -First 1)
+                $matchLine = if ($matchLine) { $matchLine.Trim() } else { $msg.Substring(0, [Math]::Min(250, $msg.Length)).Trim() }
+
+                $results += [PSCustomObject]@{
+                    Type            = "Event: $shortLog"
+                    User            = $evtUser
+                    Timestamp       = $evt.TimeCreated.ToString("yyyy-MM-dd HH:mm:ss")
+                    Name            = "$friendlyDesc (ID $($evt.Id))"
+                    Value           = $matchLine
+                    SHA1            = "N/A"
+                    SHA256          = "N/A"
+                    RemediationType = "None"
+                    RemediationPath = "N/A"
+                }
+            }
+        } catch { }
     }
 
     if ($results.Count -gt 0) {
-        Process-RemediationLoop -items $results -title "PROCESS TRIAGE RESULTS"
+        Process-RemediationLoop -items $results -title "EVENT LOG SEARCH: $($keywords -join ', ')"
     } else {
-        Write-Host "`n[+] No anomalous running processes detected." -ForegroundColor Green
+        Write-Host "`n[-] No matching events found in the selected timeframe." -ForegroundColor Red
         Pause
     }
 }
@@ -2624,8 +2696,8 @@ function Show-Menu {
     Write-Host "  ---------------------------------------------------------------" -ForegroundColor DarkGray
     Write-Host "  [" -NoNewline -ForegroundColor White; Write-Host "5" -NoNewline -ForegroundColor Cyan; Write-Host "]  PowerShell Execution History" -ForegroundColor White
     Write-Host "       Event Log (ID 4104) with timeframe filter" -ForegroundColor DarkGray
-    Write-Host "  [" -NoNewline -ForegroundColor White; Write-Host "6" -NoNewline -ForegroundColor Cyan; Write-Host "]  Process Triage & Execution Hunt" -ForegroundColor White
-    Write-Host "       Unsigned processes, suspicious paths & LOLBins" -ForegroundColor DarkGray
+    Write-Host "  [" -NoNewline -ForegroundColor White; Write-Host "6" -NoNewline -ForegroundColor Cyan; Write-Host "]  Broad Event Log Search" -ForegroundColor White
+    Write-Host "       Search Security, System, RDP, Tasks, PowerShell logs by keyword" -ForegroundColor DarkGray
     Write-Host ""
     Write-Host "  CLICKFIX / DRIVE-BY TRIAGE" -ForegroundColor Yellow
     Write-Host "  ---------------------------------------------------------------" -ForegroundColor DarkGray
@@ -2670,7 +2742,7 @@ function Show-Menu {
         Get-PSHistory
     }
     elseif ($choice -eq '6') {
-        Get-ProcessTriage
+        Get-EventLogSearch
     }
     elseif ($choice -eq '7') {
         Get-RecentlyWrittenFiles
