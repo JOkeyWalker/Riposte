@@ -2,9 +2,9 @@
 
 <#
 .SYNOPSIS
-    Riposte.ps1 - Portable SOC Threat Hunting & Forensic Triage Tool (Headless/Remote Shell Edition)
+    Riposte.ps1 - Tactical Threat Hunting & Triage Toolkit
 .DESCRIPTION
-    100% CLI-native script. Safe for SentinelOne, WinRM, and reverse shells.
+    100% CLI-native PowerShell toolkit for SOC triage and threat hunting.
     Optimized to prevent console hangs, support multi-line pasting, and handle wildcards.
 .NOTES
     To pull directly from GitHub onto a device (e.g. via ConnectWise Backstage):
@@ -27,7 +27,6 @@ if (-not (Get-PSDrive HKU -ErrorAction SilentlyContinue)) {
 function Show-Banner {
     Write-Host "===============================================================" -ForegroundColor DarkCyan
     Write-Host "  [ Riposte ] - TACTICAL THREAT HUNTING & TRIAGE TOOLKIT       " -ForegroundColor Cyan
-    Write-Host "  * HEADLESS EDITION - SAFE FOR REMOTE SHELLS (S1/RTR/WinRM) * " -ForegroundColor Yellow
     Write-Host "===============================================================" -ForegroundColor DarkCyan
     Write-Host "  Target OS: $((Get-CimInstance Win32_OperatingSystem).Caption)" -ForegroundColor DarkGray
     Write-Host "  User:      $env:USERDOMAIN\$env:USERNAME" -ForegroundColor DarkGray
