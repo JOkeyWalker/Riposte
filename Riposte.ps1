@@ -1888,8 +1888,14 @@ function Get-EventLogSearch {
                     4688 {
                         $proc = if ($msg -match 'New Process Name:\s+(.+)') { $Matches[1].Trim() } else { "-" }
                         $cmdline = if ($msg -match 'Process Command Line:\s+(.+)') { $Matches[1].Trim() } else { "-" }
-                        $parent = if ($msg -match 'Creator Process Name:\s+(.+)') { $Matches[1].Trim() } else { "-" }
-                        "Process: $proc | CommandLine: $cmdline | Parent: $parent"
+                        $parentFull = if ($msg -match 'Creator Process Name:\s+(.+)') { $Matches[1].Trim() } else { "-" }
+                        if ($cmdline.Length -gt 200) {
+                            $cut = $cmdline.Substring(0, 200)
+                            $lastSpace = $cut.LastIndexOf(' ')
+                            $cmdline = $(if ($lastSpace -gt 100) { $cut.Substring(0, $lastSpace) } else { $cut }) + "..."
+                        }
+                        $parentName = if ($parentFull -ne "-") { [System.IO.Path]::GetFileName($parentFull) } else { "-" }
+                        "Process: $proc | CommandLine: $cmdline | Parent: $parentName"
                     }
 
                     # New service installed
@@ -1935,9 +1941,16 @@ function Get-EventLogSearch {
                     1 {
                         $image = if ($msg -match 'Image:\s+(.+)') { $Matches[1].Trim() } else { "-" }
                         $cmdline = if ($msg -match 'CommandLine:\s+(.+)') { $Matches[1].Trim() } else { "-" }
-                        $parent = if ($msg -match 'ParentImage:\s+(.+)') { $Matches[1].Trim() } else { "-" }
-                        if ($cmdline.Length -gt 150) { $cmdline = $cmdline.Substring(0, 150) + "..." }
-                        "Image: $image | CommandLine: $cmdline | Parent: $parent"
+                        $parentFull = if ($msg -match 'ParentImage:\s+(.+)') { $Matches[1].Trim() } else { "-" }
+                        # Trim CommandLine at 200 chars on a word boundary
+                        if ($cmdline.Length -gt 200) {
+                            $cut = $cmdline.Substring(0, 200)
+                            $lastSpace = $cut.LastIndexOf(' ')
+                            $cmdline = $(if ($lastSpace -gt 100) { $cut.Substring(0, $lastSpace) } else { $cut }) + "..."
+                        }
+                        # Show only filename for parent to keep it readable
+                        $parentName = if ($parentFull -ne "-") { [System.IO.Path]::GetFileName($parentFull) } else { "-" }
+                        "Image: $image | CommandLine: $cmdline | Parent: $parentName"
                     }
 
                     # Sysmon network connect
