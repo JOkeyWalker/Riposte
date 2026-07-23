@@ -1685,7 +1685,7 @@ function Get-PSHistory {
             Write-Host "`n---------------------------------------------------------------" -ForegroundColor DarkCyan
             Write-Host "  Navigation: [N] Next Page | [P] Previous Page | [R] Return to Menu" -ForegroundColor Cyan
             Write-Host "---------------------------------------------------------------" -ForegroundColor DarkCyan
-            $navChoice = Read-Host " [+] Select Option"
+            $navChoice = Repair-Input (Read-Host " [+] Select Option")
             
             if ($navChoice -eq 'R' -or $navChoice -eq 'r' -or -not $navChoice) {
                 $loop = $false
@@ -2510,7 +2510,7 @@ function Get-BrowserNotifications {
         Write-Host "---------------------------------------------------------------" -ForegroundColor DarkCyan
         Write-Host "  Enter number(s) to REMOVE (e.g. 1,3) | [R] Return to Menu" -ForegroundColor Cyan
         Write-Host "---------------------------------------------------------------" -ForegroundColor DarkCyan
-        $choice = Read-Host " [+] Select Option"
+        $choice = Repair-Input (Read-Host " [+] Select Option")
 
         if ($choice -eq 'R' -or $choice -eq 'r' -or -not $choice) { $loop = $false; return }
 
