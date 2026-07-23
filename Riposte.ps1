@@ -902,7 +902,7 @@ function Invoke-GlobalHunt {
     )
 
     Write-Host "`n[*] Initiating Optimized Global Hunt for: $($keywords -join ', ')..." -ForegroundColor Yellow
-    $globalResults = @()
+    $globalResults = [System.Collections.Generic.List[PSCustomObject]]::new()
 
     # --- 0. DIRECT ALERT TARGET RESOLUTION ---
     if ($directIocs -and $directIocs.Path) {
@@ -910,7 +910,7 @@ function Invoke-GlobalHunt {
             $fileObj = Get-Item -Path $directIocs.Path
             $owner = Get-AssociatedUser -path $fileObj.FullName
             $hashes = Get-FileHashes -filePath $directIocs.Path
-            $globalResults += [PSCustomObject]@{
+            $globalResults.Add([PSCustomObject]@{
                 Type            = "S1 Alert Target File (Active)"
                 User            = $owner
                 Timestamp       = "Identified in S1 Alert"
@@ -920,7 +920,7 @@ function Invoke-GlobalHunt {
                 SHA256          = $hashes.SHA256
                 RemediationType = "File"
                 RemediationPath = $fileObj.FullName
-            }
+            })
             Write-Host "[+] Resolved active S1 alert target file directly on disk!" -ForegroundColor Green
         }
     }
@@ -933,7 +933,7 @@ function Invoke-GlobalHunt {
             if ($rk.Name -match $regexPattern -or $rk.Value -match $regexPattern) {
                 $resolvedPath = Extract-FilePath -cmdline $rk.Value
                 $hashes = Get-FileHashes -filePath $resolvedPath
-                $globalResults += [PSCustomObject]@{
+                $globalResults.Add([PSCustomObject]@{
                     Type            = "Registry Value Match"
                     User            = $rk.User
                     Timestamp       = "Key: $($rk.Path)"
@@ -943,7 +943,7 @@ function Invoke-GlobalHunt {
                     SHA256          = $hashes.SHA256
                     RemediationType = "Registry"
                     RemediationPath = $rk.Path
-                }
+                })
             }
         }
     } catch {
@@ -985,7 +985,7 @@ function Invoke-GlobalHunt {
                 $resolvedPath = Extract-FilePath -cmdline $action
                 $hashes = Get-FileHashes -filePath $resolvedPath
 
-                $globalResults += [PSCustomObject]@{
+                $globalResults.Add([PSCustomObject]@{
                     Type            = "Scheduled Task Match"
                     User            = $principal
                     Timestamp       = "Last Run: $lastRun"
@@ -995,7 +995,7 @@ function Invoke-GlobalHunt {
                     SHA256          = $hashes.SHA256
                     RemediationType = "Task"
                     RemediationPath = "$($task.TaskPath.TrimEnd('/'))\$($task.TaskName)"
-                }
+                })
             }
         } catch {}
     }
@@ -1008,7 +1008,7 @@ function Invoke-GlobalHunt {
             $resolvedPath = Extract-FilePath -cmdline $service.PathName
             $hashes = Get-FileHashes -filePath $resolvedPath
 
-            $globalResults += [PSCustomObject]@{
+            $globalResults.Add([PSCustomObject]@{
                 Type            = "Service Match"
                 User            = $service.StartName
                 Timestamp       = "State: $($service.State)"
@@ -1018,7 +1018,7 @@ function Invoke-GlobalHunt {
                 SHA256          = $hashes.SHA256
                 RemediationType = "Service"
                 RemediationPath = $service.Name
-            }
+            })
         }
     }
 
@@ -1057,6 +1057,9 @@ function Invoke-GlobalHunt {
     )
 
     Write-Host "[*] Scanning File System (Names only)..." -ForegroundColor Yellow
+    $fsFileCount = 0
+    $fsDirCount  = 0
+    $fsMatchCount = 0
 
     # Build deduplicated keyword filter list once (strips wildcards, removes dupes, skips too-short)
     $cleanKeywords = @()
@@ -1078,8 +1081,13 @@ function Invoke-GlobalHunt {
             $currentPath = $queue.Dequeue()
             if ($excludeDirs -contains $currentPath) { continue }
 
+            $fsDirCount++
+            if ($fsDirCount % 200 -eq 0) {
+                Write-Host "[*] File scan: $fsDirCount dirs, $fsFileCount files checked, $fsMatchCount matches..." -ForegroundColor DarkGray
+            }
             # Collect all files in this directory once, then test against all keywords
             $allFiles = Get-ChildItem -Path $currentPath -File -Force -ErrorAction SilentlyContinue
+            $fsFileCount += $allFiles.Count
             foreach ($file in $allFiles) {
                 # Skip already-seen paths (prevents duplicate results when multiple keywords match)
                 if (-not $seenFilePaths.Add($file.FullName)) { continue }
@@ -1094,9 +1102,10 @@ function Invoke-GlobalHunt {
                 # Secondary regex check for accuracy
                 if ($file.Name -notmatch $regexPattern) { continue }
 
+                $fsMatchCount++
                 $associatedUser = Get-AssociatedUser -path $file.FullName
                 $hashes = Get-FileHashes -filePath $file.FullName
-                $globalResults += [PSCustomObject]@{
+                $globalResults.Add([PSCustomObject]@{
                     Type            = "File Name Match"
                     User            = $associatedUser
                     Timestamp       = "Modified: $($file.LastWriteTime.ToString('yyyy-MM-dd HH:mm:ss'))"
@@ -1106,7 +1115,7 @@ function Invoke-GlobalHunt {
                     SHA256          = $hashes.SHA256
                     RemediationType = "File"
                     RemediationPath = $file.FullName
-                }
+                })
             }
 
             $subDirs = Get-ChildItem -Path $currentPath -Directory -Force -ErrorAction SilentlyContinue
@@ -1140,7 +1149,7 @@ function Invoke-GlobalHunt {
                 } catch { "Unknown" }
 
                 $hashes = Get-FileHashes -filePath $procPath
-                $globalResults += [PSCustomObject]@{
+                $globalResults.Add([PSCustomObject]@{
                     Type            = "Running Process Match"
                     User            = $procOwner
                     Timestamp       = "PID: $($proc.ProcessId)"
@@ -1150,7 +1159,7 @@ function Invoke-GlobalHunt {
                     SHA256          = $hashes.SHA256
                     RemediationType = "Process"
                     RemediationPath = $proc.ProcessId
-                }
+                })
             }
         }
     } catch {
@@ -1196,6 +1205,7 @@ function Invoke-GlobalHunt {
             if ($eventIDs.Count -gt 0) { $filter['Id'] = $eventIDs }
 
             $events = Get-WinEvent -FilterHashtable $filter -MaxEvents 5000 -ErrorAction Stop
+            Write-Host "[*] $($logName -replace 'Microsoft-Windows-','' -replace '/Operational',''): $($events.Count) events to check..." -ForegroundColor DarkGray
 
             foreach ($evt in $events) {
                 # Render full event message and check against keywords
@@ -1228,7 +1238,7 @@ function Invoke-GlobalHunt {
                 $matchLine = ($msg -split "`n" | Where-Object { $_ -match $regexPattern } | Select-Object -First 1)
                 $matchLine = if ($matchLine) { $matchLine.Trim() } else { $msg.Substring(0, [Math]::Min(200, $msg.Length)).Trim() }
 
-                $globalResults += [PSCustomObject]@{
+                $globalResults.Add([PSCustomObject]@{
                     Type            = "Event Log: $shortLog (ID $($evt.Id))"
                     User            = $evtUser
                     Timestamp       = $evt.TimeCreated.ToString("yyyy-MM-dd HH:mm:ss")
@@ -1238,7 +1248,7 @@ function Invoke-GlobalHunt {
                     SHA256          = "N/A"
                     RemediationType = "None"
                     RemediationPath = "N/A"
-                }
+                })
             }
         } catch {
             # Log not accessible or no events in range  -  skip silently
