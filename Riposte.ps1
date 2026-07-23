@@ -617,6 +617,18 @@ function Process-RemediationLoop {
                             Write-Host "       Title     : $($item.Name)" -ForegroundColor Cyan
                         }
                         Write-Host "       URL       : $histUrl" -ForegroundColor Green
+                    } elseif ($typeGroup.Name -like "Event:*") {
+                        # Split pipe-delimited structured detail into labeled lines
+                        $segments = $item.Value -split ' \| '
+                        foreach ($seg in $segments) {
+                            if ($seg -match '^([^:]+):\s*(.*)$') {
+                                Write-Host "       " -NoNewline
+                                Write-Host "$($Matches[1].PadRight(12)): " -NoNewline -ForegroundColor Yellow
+                                Write-Host $Matches[2] -ForegroundColor Green
+                            } else {
+                                Write-Host "       $seg" -ForegroundColor Green
+                            }
+                        }
                     } elseif ($typeGroup.Name -eq "Extension") {
                         Write-Host "       $($item.Value)" -ForegroundColor Green
                     } elseif ($typeGroup.Name -match "Scheduled Task|Service|Process|WMI|RunMRU") {
