@@ -2052,6 +2052,8 @@ function Get-RecentlyWrittenFiles {
     $searchPaths += @("C:\ProgramData", "C:\Windows\Temp", "C:\Temp")
 
     $results = @()
+    $dirCount = 0
+    $matchCount = 0
     foreach ($path in $searchPaths) {
         if (-not (Test-Path $path)) { continue }
         
@@ -2060,6 +2062,10 @@ function Get-RecentlyWrittenFiles {
 
         while ($queue.Count -gt 0) {
             $currentPath = $queue.Dequeue()
+            $dirCount++
+            if ($dirCount % 50 -eq 0) {
+                Write-Host "[*] Scanning: $dirCount directories checked, $matchCount matches so far..." -ForegroundColor DarkGray
+            }
             
             foreach ($ext in $targetExtensions) {
                 $files = Get-ChildItem -Path $currentPath -Filter $ext -File -Force -ErrorAction SilentlyContinue
@@ -2067,7 +2073,7 @@ function Get-RecentlyWrittenFiles {
                     if ($file.LastWriteTime -ge $startTime -or $file.CreationTime -ge $startTime) {
                         $owner = Get-AssociatedUser -path $file.FullName
                         $hashes = Get-FileHashes -filePath $file.FullName
-                        
+                        $matchCount++
                         $results += [PSCustomObject]@{
                             Type            = "Recently Written File"
                             User            = $owner
