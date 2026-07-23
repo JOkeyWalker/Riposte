@@ -1044,8 +1044,6 @@ function Invoke-GlobalHunt {
     )
 
     Write-Host "[*] Scanning File System (Names only)..." -ForegroundColor Yellow
-    $script:fsFileCount = 0
-    $script:fsMatchCount = 0
 
     # Build deduplicated keyword filter list once (strips wildcards, removes dupes, skips too-short)
     $cleanKeywords = @()
@@ -1069,10 +1067,6 @@ function Invoke-GlobalHunt {
 
             # Collect all files in this directory once, then test against all keywords
             $allFiles = Get-ChildItem -Path $currentPath -File -Force -ErrorAction SilentlyContinue
-            $script:fsFileCount += $allFiles.Count
-            if ($script:fsFileCount -gt 0 -and ($script:fsFileCount % 1000) -lt $allFiles.Count) {
-                Write-Host "[*] File scan: $($script:fsFileCount) files scanned, $($script:fsMatchCount) matches..." -ForegroundColor DarkGray
-            }
             foreach ($file in $allFiles) {
                 # Skip already-seen paths (prevents duplicate results when multiple keywords match)
                 if (-not $seenFilePaths.Add($file.FullName)) { continue }
@@ -1089,7 +1083,6 @@ function Invoke-GlobalHunt {
 
                 $associatedUser = Get-AssociatedUser -path $file.FullName
                 $hashes = Get-FileHashes -filePath $file.FullName
-                $script:fsMatchCount++
                 $globalResults += [PSCustomObject]@{
                     Type            = "File Name Match"
                     User            = $associatedUser
@@ -1190,7 +1183,6 @@ function Invoke-GlobalHunt {
             if ($eventIDs.Count -gt 0) { $filter['Id'] = $eventIDs }
 
             $events = Get-WinEvent -FilterHashtable $filter -MaxEvents 5000 -ErrorAction Stop
-            Write-Host "[*] $($logName -replace 'Microsoft-Windows-','' -replace '/Operational',''): $($events.Count) events to check..." -ForegroundColor DarkGray
 
             foreach ($evt in $events) {
                 # Render full event message and check against keywords
@@ -1797,76 +1789,6 @@ function Get-ProcessTriage {
     }
 }
 
-function Get-StealthPersistence {
-    Show-Banner
-    Write-Host "===============================================================" -ForegroundColor DarkCyan
-    Write-Host "  STEALTH PERSISTENCE HUNT (WMI & BITS)" -ForegroundColor Yellow
-    Write-Host "===============================================================" -ForegroundColor DarkCyan
-    $confirm = Read-Host " [?] Press ENTER to begin scan or Q to cancel"
-    if ($confirm -eq 'Q' -or $confirm -eq 'q') { return }
-    Write-Host "[*] Scanning for WMI Event Subscriptions & BITS Jobs..." -ForegroundColor Yellow
-    
-    $results = @()
-
-    # --- 1. WMI Event Subscriptions ---
-    try {
-        $filters = Get-CimInstance -Namespace root\subscription -ClassName __EventFilter
-        $consumers = Get-CimInstance -Namespace root\subscription -ClassName __EventConsumer
-        $bindings = Get-CimInstance -Namespace root\subscription -ClassName __FilterToConsumerBinding
-
-        foreach ($binding in $bindings) {
-            $filterName = $binding.Filter.Name
-            $consumerName = $binding.Consumer.Name
-            
-            $matchedConsumer = $consumers | Where-Object { $_.Name -eq $consumerName }
-            $action = "N/A"
-            if ($matchedConsumer) {
-                if ($matchedConsumer.CommandLineTemplate) { $action = $matchedConsumer.CommandLineTemplate }
-                elseif ($matchedConsumer.ScriptText) { $action = "Script Block: " + $matchedConsumer.ScriptText }
-            }
-
-            $results += [PSCustomObject]@{
-                Type            = "WMI Event Subscription"
-                User            = "SYSTEM"
-                Timestamp       = "Filter: $filterName | Consumer: $consumerName"
-                Name            = $consumerName
-                Value           = $action
-                SHA1            = "N/A"
-                SHA256          = "N/A"
-                RemediationType = "WMI"
-                RemediationPath = "__FilterToConsumerBinding"
-            }
-        }
-    } catch {
-        Write-Host "[-] Error scanning WMI Subscriptions: $_" -ForegroundColor Red
-    }
-
-    # --- 2. BITS Jobs ---
-    try {
-        $bitsJobs = Get-BitsTransfer -AllUsers -ErrorAction SilentlyContinue
-        foreach ($job in $bitsJobs) {
-            $results += [PSCustomObject]@{
-                Type            = "Active BITS Transfer Job"
-                User            = Resolve-SidToUsername -sid $job.OwnerIp
-                Timestamp       = "State: $($job.JobState) | Priority: $($job.Priority)"
-                Name            = $job.DisplayName
-                Value           = "Remote: $($job.FileList.RemoteUrl) -> Local: $($job.FileList.LocalName)"
-                SHA1            = "N/A"
-                SHA256          = "N/A"
-                RemediationType = "None"
-                RemediationPath = $job.JobId
-            }
-        }
-    } catch {}
-
-    if ($results.Count -gt 0) {
-        Process-RemediationLoop -items $results -title "STEALTH PERSISTENCE RESULTS"
-    } else {
-        Write-Host "`n[+] No stealth WMI or BITS persistence mechanisms found." -ForegroundColor Green
-        Pause
-    }
-}
-
 function Get-RecentlyWrittenFiles {
     Show-Banner
     Write-Host "===============================================================" -ForegroundColor DarkCyan
@@ -1979,8 +1901,8 @@ function Get-RunMRU {
                         $results += [PSCustomObject]@{
                             Type            = "RunMRU Command"
                             User            = $username
-                            Timestamp       = "Value: $($prop.Name)"
-                            Name            = $prop.Name
+                            Timestamp       = "Registry key: $($prop.Name)"
+                            Name            = $cleanValue
                             Value           = $cleanValue
                             SHA1            = "N/A"
                             SHA256          = "N/A"
@@ -2014,8 +1936,8 @@ function Get-RunMRU {
                                 $results += [PSCustomObject]@{
                                     Type            = "RunMRU Command"
                                     User            = "$($profile.Name) (Offline)"
-                                    Timestamp       = "Value: $($prop.Name)"
-                                    Name            = $prop.Name
+                                    Timestamp       = "Registry key: $($prop.Name)"
+                                    Name            = $cleanValue
                                     Value           = $cleanValue
                                     SHA1            = "N/A"
                                     SHA256          = "N/A"
@@ -2258,8 +2180,13 @@ function Get-BrowserNotifications {
             foreach ($profileDir in $profileDirs) {
 
                 if ($browser.Type -eq "Chromium") {
-                    $prefsFile = "$profileDir\Preferences"
-                    if (-not (Test-Path $prefsFile)) { continue }
+                    # Check both Preferences and Secure Preferences — Edge stores notifications in either
+                    $prefFiles = @("$profileDir\Preferences", "$profileDir\Secure Preferences") |
+                        Where-Object { Test-Path $_ }
+
+                    $seenOrigins = [System.Collections.Generic.HashSet[string]]::new()
+
+                    foreach ($prefsFile in $prefFiles) {
                     try {
                         $prefs = Get-Content $prefsFile -Raw -ErrorAction Stop | ConvertFrom-Json
                         $notifSection = $prefs.profile.content_settings.exceptions.notifications
@@ -2271,6 +2198,9 @@ function Get-BrowserNotifications {
 
                             # 1 = Allow, 2 = Block, 3 = Ask — we only care about Allow
                             if ($setting -ne 1) { continue }
+
+                            # Deduplicate across both pref files
+                            if (-not $seenOrigins.Add($origin)) { continue }
 
                             # Flag suspicious origins
                             $suspicious = $false
@@ -2293,6 +2223,7 @@ function Get-BrowserNotifications {
                             }
                         }
                     } catch { continue }
+                    } # end foreach prefFiles
 
                 } elseif ($browser.Type -eq "Firefox") {
                     # Firefox stores permissions in permissions.sqlite
@@ -2438,85 +2369,49 @@ function Get-BrowserForensics {
     Write-Host ""
     Write-Host "  [" -NoNewline -ForegroundColor White; Write-Host "1" -NoNewline -ForegroundColor Cyan; Write-Host "]  Browser Extensions" -ForegroundColor White
     Write-Host "       Name, version, source, permissions, install date" -ForegroundColor DarkGray
-    Write-Host "  [" -NoNewline -ForegroundColor White; Write-Host "2" -NoNewline -ForegroundColor Cyan; Write-Host "]  Browser History" -ForegroundColor White
-    Write-Host "       URLs, page titles, timestamps (EST)" -ForegroundColor DarkGray
-    Write-Host "  [" -NoNewline -ForegroundColor White; Write-Host "3" -NoNewline -ForegroundColor Cyan; Write-Host "]  Notification Permissions" -ForegroundColor White
+    Write-Host "  [" -NoNewline -ForegroundColor White; Write-Host "2" -NoNewline -ForegroundColor Cyan; Write-Host "]  Notification Permissions" -ForegroundColor White
     Write-Host "       Detect and remove scareware/spam notification origins" -ForegroundColor DarkGray
     Write-Host ""
 
     $subChoice = Read-Host " [?] Select an option (or Q to cancel)"
     if ($subChoice -eq 'Q' -or $subChoice -eq 'q') { return }
-    if ($subChoice -notin @('1','2','3')) {
+    if ($subChoice -notin @('1','2')) {
         Write-Host "[-] Invalid selection." -ForegroundColor Red
         Start-Sleep -Seconds 1
         return
     }
 
-    # Notification scan - handled separately, no further shared setup needed
-    if ($subChoice -eq '3') {
+    if ($subChoice -eq '2') {
         Get-BrowserNotifications
         return
     }
 
-    $doExtensions = $subChoice -eq '1'
-    $doHistory    = $subChoice -eq '2'
-
-    # Timeframe prompt only if history selected
-    $parsedTime = $null
-    if ($doHistory) {
-        Write-Host ""
-        Write-Host "  Timeframe examples: 30m, 1h, 6h, 1d, 7d" -ForegroundColor DarkGray
-        $timeInput = Repair-Input (Read-Host " [?] Enter history timeframe")
-        if ($timeInput -eq 'Q' -or $timeInput -eq 'q') { return }
-        if (-not $timeInput) { $timeInput = "24h" }
-        $parsedTime = Parse-Timeframe -inputString $timeInput
-        if (-not $parsedTime -or -not $parsedTime.StartTime) {
-            Write-Host "[-] Invalid timeframe. Using last 24 hours." -ForegroundColor Yellow
-            $parsedTime = @{ StartTime = (Get-Date).AddHours(-24); EndTime = Get-Date }
-        }
-    }
-
-    # EST timezone for display
-    try {
-        $script:estZone = [System.TimeZoneInfo]::FindSystemTimeZoneById("Eastern Standard Time")
-    } catch {
-        $script:estZone = $null
-    }
-
+    # Extensions only from here
     $results = @()
 
-    # Browser profile definitions — use static relative paths, not env vars
-    # This ensures we correctly scan ALL users even when running as a different admin account
     $browserDefs = @(
-        @{ Name = "Google Chrome";   LocalPath = "Google\Chrome\User Data";              HistoryFile = "History";       ExtFolder = "Extensions"; Type = "Chromium" },
-        @{ Name = "Microsoft Edge";  LocalPath = "Microsoft\Edge\User Data";             HistoryFile = "History";       ExtFolder = "Extensions"; Type = "Chromium" },
-        @{ Name = "Brave";           LocalPath = "BraveSoftware\Brave-Browser\User Data"; HistoryFile = "History";      ExtFolder = "Extensions"; Type = "Chromium" },
-        @{ Name = "Firefox";         LocalPath = "Mozilla\Firefox\Profiles";             HistoryFile = "places.sqlite"; ExtFolder = "extensions"; Type = "Firefox"; Roaming = $true }
+        @{ Name = "Google Chrome";   LocalPath = "Google\Chrome\User Data";               ExtFolder = "Extensions"; Type = "Chromium" },
+        @{ Name = "Microsoft Edge";  LocalPath = "Microsoft\Edge\User Data";              ExtFolder = "Extensions"; Type = "Chromium" },
+        @{ Name = "Brave";           LocalPath = "BraveSoftware\Brave-Browser\User Data"; ExtFolder = "Extensions"; Type = "Chromium" },
+        @{ Name = "Firefox";         LocalPath = "Mozilla\Firefox\Profiles";              ExtFolder = "extensions"; Type = "Firefox"; Roaming = $true }
     )
 
-    # Scan all user profiles on the device
     $userRoots = @()
     Get-ChildItem "C:\Users" -Directory -ErrorAction SilentlyContinue |
         Where-Object { $_.Name -notmatch '^(Public|Default|Default User|All Users|TEMP|systemprofile|LocalService|NetworkService)$' } |
         ForEach-Object { $userRoots += $_.FullName }
-
-    # Add current session user if not already included
-    if ($env:USERPROFILE -and ($userRoots -notcontains $env:USERPROFILE)) {
-        $userRoots += $env:USERPROFILE
-    }
+    if ($env:USERPROFILE -and ($userRoots -notcontains $env:USERPROFILE)) { $userRoots += $env:USERPROFILE }
 
     Write-Host "[*] Scanning $($userRoots.Count) user profile(s)..." -ForegroundColor DarkGray
+
     foreach ($userRoot in $userRoots) {
         $userName = Split-Path $userRoot -Leaf
 
         foreach ($browser in $browserDefs) {
-            # Build path directly from user root — no env var substitution needed
             $appDataSub  = if ($browser.ContainsKey('Roaming') -and $browser.Roaming) { "AppData\Roaming" } else { "AppData\Local" }
             $profileBase = "$userRoot\$appDataSub\$($browser.LocalPath)"
-
             if (-not (Test-Path $profileBase)) { continue }
 
-            # Collect profile directories
             $profileDirs = @()
             if ($browser.Type -eq "Chromium") {
                 if (Test-Path "$profileBase\Default") { $profileDirs += "$profileBase\Default" }
@@ -2528,275 +2423,112 @@ function Get-BrowserForensics {
             }
 
             foreach ($profileDir in $profileDirs) {
+                $extBase = "$profileDir\$($browser.ExtFolder)"
+                if (-not (Test-Path $extBase)) { continue }
 
-                # -----------------------------------------------------------
-                # EXTENSIONS
-                # -----------------------------------------------------------
-                if ($doExtensions) {
-                    $extBase = "$profileDir\$($browser.ExtFolder)"
-                    if (Test-Path $extBase) {
-                        if ($browser.Type -eq "Chromium") {
-                            $extFolders = Get-ChildItem $extBase -Directory -ErrorAction SilentlyContinue
-                            foreach ($extDir in $extFolders) {
-                                $versionDir = Get-ChildItem $extDir.FullName -Directory -ErrorAction SilentlyContinue |
-                                    Sort-Object Name -Descending | Select-Object -First 1
-                                $manifestPath = if ($versionDir) { "$($versionDir.FullName)\manifest.json" } else { "$($extDir.FullName)\manifest.json" }
-                                if (-not (Test-Path $manifestPath)) { continue }
-                                try {
-                                    $manifest    = Get-Content $manifestPath -Raw -ErrorAction Stop | ConvertFrom-Json
-                                    $extVersion  = $manifest.version
-
-                                    # Resolve localized name — __MSG_key__ requires reading _locales
-                                    $rawName = $manifest.name
-                                    if ($rawName -match '^__MSG_(.+)__$') {
-                                        $msgKey = $Matches[1]
-                                        $resolved = $null
-                                        # Try _locales/en_US then en then first available locale
-                                        $localeBase = if ($versionDir) { "$($versionDir.FullName)\_locales" } else { "$($extDir.FullName)\_locales" }
-                                        foreach ($locale in @('en_US','en')) {
-                                            $msgFile = "$localeBase\$locale\messages.json"
-                                            if (Test-Path $msgFile) {
-                                                try {
-                                                    $msgs = Get-Content $msgFile -Raw | ConvertFrom-Json
-                                                    if ($msgs.$msgKey) { $resolved = $msgs.$msgKey.message; break }
-                                                    # Keys are case-insensitive in practice
-                                                    $match = $msgs.PSObject.Properties | Where-Object { $_.Name -ieq $msgKey } | Select-Object -First 1
-                                                    if ($match) { $resolved = $match.Value.message; break }
-                                                } catch {}
-                                            }
-                                        }
-                                        if (-not $resolved) {
-                                            # Fall back to first available locale
-                                            $firstLocale = Get-ChildItem $localeBase -Directory -ErrorAction SilentlyContinue | Select-Object -First 1
-                                            if ($firstLocale) {
-                                                $msgFile = "$($firstLocale.FullName)\messages.json"
-                                                if (Test-Path $msgFile) {
-                                                    try {
-                                                        $msgs = Get-Content $msgFile -Raw | ConvertFrom-Json
-                                                        $match = $msgs.PSObject.Properties | Where-Object { $_.Name -ieq $msgKey } | Select-Object -First 1
-                                                        if ($match) { $resolved = $match.Value.message }
-                                                    } catch {}
-                                                }
-                                            }
-                                        }
-                                        $extName = if ($resolved) { $resolved } else { "ID: $($extDir.Name)" }
-                                    } else {
-                                        $extName = if ($rawName) { $rawName } else { "ID: $($extDir.Name)" }
+                if ($browser.Type -eq "Chromium") {
+                    $extFolders = Get-ChildItem $extBase -Directory -ErrorAction SilentlyContinue
+                    foreach ($extDir in $extFolders) {
+                        $versionDir = Get-ChildItem $extDir.FullName -Directory -ErrorAction SilentlyContinue |
+                            Sort-Object Name -Descending | Select-Object -First 1
+                        $manifestPath = if ($versionDir) { "$($versionDir.FullName)\manifest.json" } else { "$($extDir.FullName)\manifest.json" }
+                        if (-not (Test-Path $manifestPath)) { continue }
+                        try {
+                            $manifest   = Get-Content $manifestPath -Raw -ErrorAction Stop | ConvertFrom-Json
+                            $extVersion = $manifest.version
+                            $rawName    = $manifest.name
+                            if ($rawName -match '^__MSG_(.+)__$') {
+                                $msgKey     = $Matches[1]
+                                $resolved   = $null
+                                $localeBase = if ($versionDir) { "$($versionDir.FullName)\_locales" } else { "$($extDir.FullName)\_locales" }
+                                foreach ($locale in @('en_US','en')) {
+                                    $msgFile = "$localeBase\$locale\messages.json"
+                                    if (Test-Path $msgFile) {
+                                        try {
+                                            $msgs  = Get-Content $msgFile -Raw | ConvertFrom-Json
+                                            $match = $msgs.PSObject.Properties | Where-Object { $_.Name -ieq $msgKey } | Select-Object -First 1
+                                            if ($match) { $resolved = $match.Value.message; break }
+                                        } catch {}
                                     }
-
-                                    $perms       = if ($manifest.permissions) { ($manifest.permissions | Where-Object { $_ -is [string] }) -join ", " } else { "None" }
-                                    $installDate = try { (Get-Item $extDir.FullName).CreationTime.ToString("yyyy-MM-dd HH:mm:ss") } catch { "Unknown" }
-
-                                    # Source detection — Edge can install from Chrome Web Store, label clearly
-                                    $source = if ($manifest.update_url -match "edge\.microsoft") { "Edge Add-ons Store" }
-                                               elseif ($manifest.update_url -match "google|gstatic") {
-                                                   if ($browser.Name -eq "Microsoft Edge") { "Chrome Web Store (via Edge)" } else { "Chrome Web Store" }
-                                               }
-                                               elseif ($manifest.update_url) { "External: $($manifest.update_url)" }
-                                               else { "Sideloaded / Unpacked" }
-
-                                    $results += [PSCustomObject]@{
-                                        Type            = "Extension"
-                                        User            = $userName
-                                        Timestamp       = "Installed: $installDate"
-                                        Name            = "$extName (v$extVersion)"
-                                        Value           = "Browser: $($browser.Name) | ID: $($extDir.Name) | Source: $source | Perms: $perms"
-                                        SHA1            = "N/A"
-                                        SHA256          = "N/A"
-                                        RemediationType = "File"
-                                        RemediationPath = $extDir.FullName
-                                    }
-                                } catch { continue }
-                            }
-                        } elseif ($browser.Type -eq "Firefox") {
-                            $extJson = "$profileDir\extensions.json"
-                            if (Test-Path $extJson) {
-                                try {
-                                    $extData = Get-Content $extJson -Raw | ConvertFrom-Json
-                                    foreach ($addon in $extData.addons) {
-                                        if ($addon.type -ne "extension") { continue }
-                                        $perms = if ($addon.userPermissions.permissions) { $addon.userPermissions.permissions -join ", " } else { "None" }
-                                        $installDate = try { ([datetime]"1970-01-01").AddMilliseconds($addon.installDate).ToString("yyyy-MM-dd HH:mm:ss") } catch { "Unknown" }
-                                        $source = if ($addon.sourceURI -match "addons.mozilla") { "Firefox Add-ons Store" }
-                                                  elseif ($addon.foreignInstall) { "Sideloaded / External" }
-                                                  else { "Unknown" }
-                                        $results += [PSCustomObject]@{
-                                            Type            = "Extension"
-                                            User            = $userName
-                                            Timestamp       = "Installed: $installDate"
-                                            Name            = "$($addon.defaultLocale.name) (v$($addon.version))"
-                                            Value           = "Browser: Firefox | ID: $($addon.id) | Source: $source | Perms: $perms"
-                                            SHA1            = "N/A"
-                                            SHA256          = "N/A"
-                                            RemediationType = "File"
-                                            RemediationPath = $addon.path
+                                }
+                                if (-not $resolved) {
+                                    $firstLocale = Get-ChildItem $localeBase -Directory -ErrorAction SilentlyContinue | Select-Object -First 1
+                                    if ($firstLocale) {
+                                        $msgFile = "$($firstLocale.FullName)\messages.json"
+                                        if (Test-Path $msgFile) {
+                                            try {
+                                                $msgs  = Get-Content $msgFile -Raw | ConvertFrom-Json
+                                                $match = $msgs.PSObject.Properties | Where-Object { $_.Name -ieq $msgKey } | Select-Object -First 1
+                                                if ($match) { $resolved = $match.Value.message }
+                                            } catch {}
                                         }
                                     }
-                                } catch { }
-                            }
-                        }
-                    }
-                }
-
-                # -----------------------------------------------------------
-                # HISTORY
-                # -----------------------------------------------------------
-                if ($doHistory) {
-                    $historyFile = "$profileDir\$($browser.HistoryFile)"
-                    if (-not (Test-Path $historyFile)) { continue }
-
-                    # Use C:\Windows\Temp as fallback - more reliable than $env:TEMP in remote shells
-                    $tempDir = if (Test-Path "C:\Windows\Temp") { "C:\Windows\Temp" } else { $env:TEMP }
-                    $tempHistory = "$tempDir\riposte_hist_$([System.IO.Path]::GetRandomFileName()).db"
-                    try {
-                        Copy-Item $historyFile $tempHistory -Force -ErrorAction Stop
-                    } catch {
-                        continue
-                    }
-
-                    try {
-                        $chromiumEpoch = [datetime]"1601-01-01 00:00:00"
-                        $histRecords   = @()
-                        $parsed        = $false
-
-                        # Attempt 1: Native .NET SQLite (System.Data.SQLite or Microsoft.Data.Sqlite)
-                        foreach ($sqliteType in @('System.Data.SQLite.SQLiteConnection','Microsoft.Data.Sqlite.SqliteConnection')) {
-                            try {
-                                $connStr = "Data Source=$tempHistory;Mode=ReadOnly;"
-                                $conn = New-Object $sqliteType($connStr)
-                                $conn.Open()
-                                $cmd = $conn.CreateCommand()
-                                # Chromium: urls + visits joined; Firefox handled separately
-                                if ($browser.Type -eq "Chromium") {
-                                    $cmd.CommandText = @"
-SELECT u.url, u.title, v.visit_time
-FROM visits v JOIN urls u ON v.url = u.id
-ORDER BY v.visit_time DESC
-LIMIT 5000
-"@
-                                } else {
-                                    $cmd.CommandText = @"
-SELECT p.url, p.title, h.visit_date
-FROM moz_historyvisits h JOIN moz_places p ON h.place_id = p.id
-ORDER BY h.visit_date DESC
-LIMIT 5000
-"@
                                 }
-                                $reader = $cmd.ExecuteReader()
-                                while ($reader.Read()) {
-                                    $url   = $reader.GetString(0)
-                                    $title = try { $reader.GetString(1) } catch { "" }
-                                    $rawTs = $reader.GetInt64(2)
-
-                                    if ($browser.Type -eq "Chromium") {
-                                        $visitTime = $chromiumEpoch.AddTicks($rawTs * 10)
-                                    } else {
-                                        # Firefox: microseconds since Unix epoch
-                                        $visitTime = ([datetime]"1970-01-01").AddTicks($rawTs * 10)
-                                    }
-                                    $histRecords += [PSCustomObject]@{ Url = $url; Title = $title; VisitTime = $visitTime }
-                                }
-                                $reader.Close(); $conn.Close()
-                                $parsed = $true
-                                break
-                            } catch { }
-                        }
-
-                        # Attempt 2: Binary fallback - scan file bytes for URL strings
-                        if (-not $parsed) {
-                            try {
-                                $dbBytes = [System.IO.File]::ReadAllBytes($tempHistory)
-                                # Latin-1 encoding preserves all byte values unlike UTF-8 which throws on invalid sequences
-                                $dbText = [System.Text.Encoding]::GetEncoding(28591).GetString($dbBytes)
-                                $urlMatches = [regex]::Matches($dbText, 'https?://[a-zA-Z0-9\-._~:/?#@!$&()*+,;=%]{10,400}')
-                                $seenUrls = [System.Collections.Generic.HashSet[string]]::new()
-                                foreach ($m in $urlMatches) {
-                                    $url = $m.Value
-                                    # Strip trailing SQLite data bleed - page titles get appended
-                                    # Cut at second http occurrence (two URLs concatenated) or at non-URL chars
-                                    if ($url -match '^(https?://[a-zA-Z0-9\-._~:/?#@!$&()*+,;=%]+?)https?://') {
-                                        $url = $Matches[1].TrimEnd(',.;:')
-                                    } else {
-                                        $url = [regex]::Match($url, '^https?://[a-zA-Z0-9\-._~:/?#@!$&()*+,;=%]+').Value.TrimEnd(',.;:')
-                                    }
-                                    if ($url.Length -lt 12) { continue }
-                                    # Skip Bing click redirects, Google pings, and edge/chrome internal URLs
-                                    if ($url -match '/ck/a\?!|/gen_204|edge\.microsoft\.com/newtabpage|msn\.com.*ntp') { continue }
-                                    # Skip URLs that end with plain text words (title bleed indicator)
-                                    if ($url -match '(virustotal|welcome|search|home|upload|microsoft|google|bing)$' -and
-                                        $url -notmatch '/(virustotal|welcome|search|home|upload)/?$') { continue }
-                                    # Normalise URL for deduplication:
-                                    # Strip common tracking/session params that create false duplicates
-                                    $normUrl = $url.TrimEnd('/')
-                                    # Remove known noise query params from Bing/Edge/Google
-                                    $normUrl = [regex]::Replace($normUrl, '[?&](ntref|PC|FORM|cvi|cvid|gs_lcrp|pglt|sk|sc|pq|qs|esf|cs|OCID|form)=[^&]*', '')
-                                    $normUrl = $normUrl.TrimEnd('?&')
-                                    # For Bing searches, keep only the q= parameter as the canonical form
-                                    if ($normUrl -match 'bing\.com/search' -and $normUrl -match '[?&]q=([^&]+)') {
-                                        $normUrl = "https://www.bing.com/search?q=$($Matches[1])"
-                                        $url     = $normUrl
-                                    }
-                                    if (-not $seenUrls.Add($normUrl)) { continue }
-                                    $histRecords += [PSCustomObject]@{ Url = $url; Title = ""; VisitTime = $null }
-                                }
-                            } catch {
-                            }
-                        }
-
-                        # Apply timeframe filter and build results
-                        foreach ($rec in $histRecords) {
-                            if ($rec.VisitTime) {
-                                if ($rec.VisitTime -lt $parsedTime.StartTime -or $rec.VisitTime -gt $parsedTime.EndTime) { continue }
-                                $displayTime = if ($script:estZone) { ([System.TimeZoneInfo]::ConvertTimeFromUtc($rec.VisitTime.ToUniversalTime(), $script:estZone)).ToString("yyyy-MM-dd HH:mm:ss") + " EST" } else { $rec.VisitTime.ToString("yyyy-MM-dd HH:mm:ss") }
+                                $extName = if ($resolved) { $resolved } else { "ID: $($extDir.Name)" }
                             } else {
-                                $displayTime = "Unavailable"
+                                $extName = if ($rawName) { $rawName } else { "ID: $($extDir.Name)" }
                             }
 
-                            # Validate title — drop if corrupt, empty, or just repeats the URL
-                            $displayTitle = $rec.Title.Trim()
-                            if ($displayTitle -eq $rec.Url) { $displayTitle = "" }
-                            if ($displayTitle) {
-                                $printableCount = ($displayTitle.ToCharArray() | Where-Object { [char]::IsLetterOrDigit($_) -or $_ -in @(" ","-","_",":",".","," ,"!","?","|","(",")","/") }).Count
-                                if ($displayTitle.Length -lt 3 -or ($printableCount / $displayTitle.Length) -lt 0.6) { $displayTitle = "" }
-                            }
+                            $perms       = if ($manifest.permissions) { ($manifest.permissions | Where-Object { $_ -is [string] }) -join ", " } else { "None" }
+                            $installDate = try { (Get-Item $extDir.FullName).CreationTime.ToString("yyyy-MM-dd HH:mm:ss") } catch { "Unknown" }
+                            $source      = if ($manifest.update_url -match "edge\.microsoft") { "Edge Add-ons Store" }
+                                           elseif ($manifest.update_url -match "google|gstatic") {
+                                               if ($browser.Name -eq "Microsoft Edge") { "Chrome Web Store (via Edge)" } else { "Chrome Web Store" }
+                                           }
+                                           elseif ($manifest.update_url) { "External: $($manifest.update_url)" }
+                                           else { "Sideloaded / Unpacked" }
 
                             $results += [PSCustomObject]@{
-                                Type            = "History"
+                                Type            = "Extension"
                                 User            = $userName
-                                Timestamp       = $displayTime
-                                Name            = if ($displayTitle) { $displayTitle } else { $rec.Url }
-                                Value           = "Browser: $($browser.Name)`nURL: $($rec.Url)"
+                                Timestamp       = "Installed: $installDate"
+                                Name            = "$extName (v$extVersion)"
+                                Value           = "Browser: $($browser.Name) | ID: $($extDir.Name) | Source: $source | Perms: $perms"
                                 SHA1            = "N/A"
                                 SHA256          = "N/A"
-                                RemediationType = "None"
-                                RemediationPath = "N/A"
+                                RemediationType = "File"
+                                RemediationPath = $extDir.FullName
                             }
-                        }
-
-                    } catch {
+                        } catch { continue }
                     }
-                    finally {
-                        Remove-Item $tempHistory -Force -ErrorAction SilentlyContinue
+                } elseif ($browser.Type -eq "Firefox") {
+                    $extJson = "$profileDir\extensions.json"
+                    if (Test-Path $extJson) {
+                        try {
+                            $extData = Get-Content $extJson -Raw | ConvertFrom-Json
+                            foreach ($addon in $extData.addons) {
+                                if ($addon.type -ne "extension") { continue }
+                                $perms       = if ($addon.userPermissions.permissions) { $addon.userPermissions.permissions -join ", " } else { "None" }
+                                $installDate = try { ([datetime]"1970-01-01").AddMilliseconds($addon.installDate).ToString("yyyy-MM-dd HH:mm:ss") } catch { "Unknown" }
+                                $source      = if ($addon.sourceURI -match "addons.mozilla") { "Firefox Add-ons Store" }
+                                               elseif ($addon.foreignInstall) { "Sideloaded / External" }
+                                               else { "Unknown" }
+                                $results += [PSCustomObject]@{
+                                    Type            = "Extension"
+                                    User            = $userName
+                                    Timestamp       = "Installed: $installDate"
+                                    Name            = "$($addon.defaultLocale.name) (v$($addon.version))"
+                                    Value           = "Browser: Firefox | ID: $($addon.id) | Source: $source | Perms: $perms"
+                                    SHA1            = "N/A"
+                                    SHA256          = "N/A"
+                                    RemediationType = "File"
+                                    RemediationPath = $addon.path
+                                }
+                            }
+                        } catch { }
                     }
                 }
             }
         }
     }
 
-    $title = switch ($subChoice) {
-        '1' { "BROWSER EXTENSIONS" }
-        '2' { "BROWSER HISTORY" }
-    }
-
     if ($results.Count -gt 0) {
-        Process-RemediationLoop -items $results -title $title
+        Process-RemediationLoop -items $results -title "BROWSER EXTENSIONS"
     } else {
-        Write-Host "`n[-] No browser data found. Browsers may not be installed or profiles are inaccessible." -ForegroundColor Red
+        Write-Host "`n[-] No browser extensions found." -ForegroundColor Red
         Pause
     }
 }
-
-
 
 function Get-SystemInfo {
     Show-Banner
@@ -2885,23 +2617,21 @@ function Show-Menu {
     Write-Host "       Registry, Tasks, Services, Processes, File System" -ForegroundColor DarkGray
     Write-Host "  [" -NoNewline -ForegroundColor White; Write-Host "3" -NoNewline -ForegroundColor Cyan; Write-Host "]  SentinelOne Threat Detail Hunt" -ForegroundColor White
     Write-Host "       Paste S1 alert details to hunt IOCs across the endpoint" -ForegroundColor DarkGray
-    Write-Host "  [" -NoNewline -ForegroundColor White; Write-Host "4" -NoNewline -ForegroundColor Cyan; Write-Host "]  Stealth Persistence Hunt" -ForegroundColor White
-    Write-Host "       WMI Subscriptions & BITS Jobs" -ForegroundColor DarkGray
-    Write-Host "  [" -NoNewline -ForegroundColor White; Write-Host "5" -NoNewline -ForegroundColor Cyan; Write-Host "]  RMM Software Hunt" -ForegroundColor White
+    Write-Host "  [" -NoNewline -ForegroundColor White; Write-Host "4" -NoNewline -ForegroundColor Cyan; Write-Host "]  RMM Software Hunt" -ForegroundColor White
     Write-Host "       Detect AnyDesk, ScreenConnect, TeamViewer, and 20+ RMM tools" -ForegroundColor DarkGray
     Write-Host ""
     Write-Host "  EXECUTION & PROCESS ANALYSIS" -ForegroundColor Yellow
     Write-Host "  ---------------------------------------------------------------" -ForegroundColor DarkGray
-    Write-Host "  [" -NoNewline -ForegroundColor White; Write-Host "6" -NoNewline -ForegroundColor Cyan; Write-Host "]  PowerShell Execution History" -ForegroundColor White
+    Write-Host "  [" -NoNewline -ForegroundColor White; Write-Host "5" -NoNewline -ForegroundColor Cyan; Write-Host "]  PowerShell Execution History" -ForegroundColor White
     Write-Host "       Event Log (ID 4104) with timeframe filter" -ForegroundColor DarkGray
-    Write-Host "  [" -NoNewline -ForegroundColor White; Write-Host "7" -NoNewline -ForegroundColor Cyan; Write-Host "]  Process Triage & Execution Hunt" -ForegroundColor White
+    Write-Host "  [" -NoNewline -ForegroundColor White; Write-Host "6" -NoNewline -ForegroundColor Cyan; Write-Host "]  Process Triage & Execution Hunt" -ForegroundColor White
     Write-Host "       Unsigned processes, suspicious paths & LOLBins" -ForegroundColor DarkGray
     Write-Host ""
     Write-Host "  CLICKFIX / DRIVE-BY TRIAGE" -ForegroundColor Yellow
     Write-Host "  ---------------------------------------------------------------" -ForegroundColor DarkGray
-    Write-Host "  [" -NoNewline -ForegroundColor White; Write-Host "8" -NoNewline -ForegroundColor Cyan; Write-Host "]  Recently Written Files Hunt" -ForegroundColor White
+    Write-Host "  [" -NoNewline -ForegroundColor White; Write-Host "7" -NoNewline -ForegroundColor Cyan; Write-Host "]  Recently Written Files Hunt" -ForegroundColor White
     Write-Host "       Detect files dropped during ClickFix or drive-by attacks" -ForegroundColor DarkGray
-    Write-Host "  [" -NoNewline -ForegroundColor White; Write-Host "9" -NoNewline -ForegroundColor Cyan; Write-Host "]  RunMRU Execution Hunt" -ForegroundColor White
+    Write-Host "  [" -NoNewline -ForegroundColor White; Write-Host "8" -NoNewline -ForegroundColor Cyan; Write-Host "]  RunMRU Execution Hunt" -ForegroundColor White
     Write-Host "       Run dialog history across all user profiles" -ForegroundColor DarkGray
     Write-Host ""
     Write-Host "  FORENSICS" -ForegroundColor Yellow
@@ -2909,7 +2639,7 @@ function Show-Menu {
     Write-Host "  [" -NoNewline -ForegroundColor White; Write-Host "10" -NoNewline -ForegroundColor Cyan; Write-Host "]  DFIR System Info" -ForegroundColor White
     Write-Host "       OS baseline, network config, local admins, AV posture" -ForegroundColor DarkGray
     Write-Host "  [" -NoNewline -ForegroundColor White; Write-Host "11" -NoNewline -ForegroundColor Cyan; Write-Host "]  Browser Forensics" -ForegroundColor White
-    Write-Host "       Extensions and history across Chrome, Edge, Brave, Firefox" -ForegroundColor DarkGray
+    Write-Host "       Extensions and notification permissions across Chrome, Edge, Brave, Firefox" -ForegroundColor DarkGray
     Write-Host ""
     Write-Host "  ---------------------------------------------------------------" -ForegroundColor DarkGray
     Write-Host "  [Q]  Quit (returns to shell)" -ForegroundColor Red
@@ -2934,21 +2664,18 @@ function Show-Menu {
         Get-S1ThreatHunt
     }
     elseif ($choice -eq '4') {
-        Get-StealthPersistence
-    }
-    elseif ($choice -eq '5') {
         Get-RMMHunt
     }
-    elseif ($choice -eq '6') {
+    elseif ($choice -eq '5') {
         Get-PSHistory
     }
-    elseif ($choice -eq '7') {
+    elseif ($choice -eq '6') {
         Get-ProcessTriage
     }
-    elseif ($choice -eq '8') {
+    elseif ($choice -eq '7') {
         Get-RecentlyWrittenFiles
     }
-    elseif ($choice -eq '9') {
+    elseif ($choice -eq '8') {
         Get-RunMRU
     }
     elseif ($choice -eq '10') {
