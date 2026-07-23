@@ -2118,10 +2118,12 @@ function Get-RunMRU {
     $loadedOfflineHives = @()
     
     try {
-        # 1. Loaded HKU RunMRU (Active Users)
-        $loadedSids = Get-ChildItem HKU: | Where-Object { $_.PSChildName -notmatch '_Classes$' -and $_.PSChildName -match '^S-1-5' }
+        # 1. Loaded HKU RunMRU (Active Users) - includes Azure AD (S-1-12-1-*) and standard (S-1-5-*)
+        $loadedSids = Get-ChildItem HKU: | Where-Object { $_.PSChildName -notmatch '_Classes$' -and $_.PSChildName -match '^S-1-' }
+        $scannedSids = [System.Collections.Generic.HashSet[string]]::new()
         foreach ($sidObj in $loadedSids) {
             $sid = $sidObj.PSChildName
+            $scannedSids.Add($sid) | Out-Null
             $username = Resolve-SidToUsername -sid $sid
             $path = "HKU:\$sid\Software\Microsoft\Windows\CurrentVersion\Explorer\RunMRU"
             if (Test-Path $path) {
@@ -2145,11 +2147,21 @@ function Get-RunMRU {
             }
         }
         
-        # 2. Offline HKU RunMRU (Logged-off Users)
+        # 2. Offline HKU RunMRU (Logged-off Users) - mount NTUSER.DAT for profiles not already scanned above
         $userProfiles = Get-ChildItem "C:\Users" -Directory
         foreach ($profile in $userProfiles) {
             if ($profile.Name -in @("All Users", "Default", "Default User", "Public")) { continue }
             
+            # Check if this profile's SID was already loaded and scanned in step 1
+            # Look up SID via ProfileList registry
+            $profileSid = $null
+            $profileListBase = "HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\ProfileList"
+            Get-ChildItem $profileListBase -ErrorAction SilentlyContinue | ForEach-Object {
+                $pp = (Get-ItemProperty $_.PSPath -Name ProfileImagePath -ErrorAction SilentlyContinue).ProfileImagePath
+                if ($pp -and $pp -like "*\$($profile.Name)") { $profileSid = $_.PSChildName }
+            }
+            if ($profileSid -and $scannedSids.Contains($profileSid)) { continue }
+
             $tempHiveName = "S1_Triage_MRU_$($profile.Name)"
             if (Test-Path "HKU:\$tempHiveName") { continue }
             
