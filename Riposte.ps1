@@ -2863,7 +2863,7 @@ function Get-SystemInfo {
 
 function Show-Menu {
     Show-Banner
-    Write-Host "  THREAT HUNTING" -ForegroundColor Yellow
+    Write-Host "  THREAT HUNTING  |  " -NoNewline -ForegroundColor Yellow; Write-Host "La Traque des Menaces" -ForegroundColor DarkGray
     Write-Host "  ---------------------------------------------------------------" -ForegroundColor DarkGray
     Write-Host "  [" -NoNewline -ForegroundColor White; Write-Host "1" -NoNewline -ForegroundColor Cyan; Write-Host "]  Hunt for Persistence" -ForegroundColor White
     Write-Host "       Registry Run Keys, Scheduled Tasks, Startup, Services" -ForegroundColor DarkGray
@@ -2874,21 +2874,21 @@ function Show-Menu {
     Write-Host "  [" -NoNewline -ForegroundColor White; Write-Host "4" -NoNewline -ForegroundColor Cyan; Write-Host "]  RMM Software Hunt" -ForegroundColor White
     Write-Host "       Detect AnyDesk, ScreenConnect, TeamViewer, and 20+ RMM tools" -ForegroundColor DarkGray
     Write-Host ""
-    Write-Host "  EXECUTION & PROCESS ANALYSIS" -ForegroundColor Yellow
+    Write-Host "  EXECUTION & PROCESS ANALYSIS  |  " -NoNewline -ForegroundColor Yellow; Write-Host "Execution & Processus" -ForegroundColor DarkGray
     Write-Host "  ---------------------------------------------------------------" -ForegroundColor DarkGray
     Write-Host "  [" -NoNewline -ForegroundColor White; Write-Host "5" -NoNewline -ForegroundColor Cyan; Write-Host "]  PowerShell Execution History" -ForegroundColor White
     Write-Host "       Event Log (ID 4104) with timeframe filter" -ForegroundColor DarkGray
     Write-Host "  [" -NoNewline -ForegroundColor White; Write-Host "6" -NoNewline -ForegroundColor Cyan; Write-Host "]  Broad Event Log Search" -ForegroundColor White
     Write-Host "       Search Security, System, RDP, Tasks, PowerShell logs by keyword" -ForegroundColor DarkGray
     Write-Host ""
-    Write-Host "  CLICKFIX / DRIVE-BY TRIAGE" -ForegroundColor Yellow
+    Write-Host "  CLICKFIX / DRIVE-BY TRIAGE  |  " -NoNewline -ForegroundColor Yellow; Write-Host "Triage ClickFix / Drive-By" -ForegroundColor DarkGray
     Write-Host "  ---------------------------------------------------------------" -ForegroundColor DarkGray
     Write-Host "  [" -NoNewline -ForegroundColor White; Write-Host "7" -NoNewline -ForegroundColor Cyan; Write-Host "]  Recently Written Files Hunt" -ForegroundColor White
     Write-Host "       Detect files dropped during ClickFix or drive-by attacks" -ForegroundColor DarkGray
     Write-Host "  [" -NoNewline -ForegroundColor White; Write-Host "8" -NoNewline -ForegroundColor Cyan; Write-Host "]  RunMRU Execution Hunt" -ForegroundColor White
     Write-Host "       Run dialog history across all user profiles" -ForegroundColor DarkGray
     Write-Host ""
-    Write-Host "  FORENSICS" -ForegroundColor Yellow
+    Write-Host "  FORENSICS  |  " -NoNewline -ForegroundColor Yellow; Write-Host "Investigation Numerique" -ForegroundColor DarkGray
     Write-Host "  ---------------------------------------------------------------" -ForegroundColor DarkGray
     Write-Host "  [" -NoNewline -ForegroundColor White; Write-Host "10" -NoNewline -ForegroundColor Cyan; Write-Host "]  DFIR System Info" -ForegroundColor White
     Write-Host "       OS baseline, network config, local admins, AV posture" -ForegroundColor DarkGray
