@@ -1108,7 +1108,7 @@ function Invoke-GlobalHunt {
                 $globalResults.Add([PSCustomObject]@{
                     Type            = "File Name Match"
                     User            = $associatedUser
-                    Timestamp       = "Modified: $($file.LastWriteTime.ToString('yyyy-MM-dd HH:mm:ss'))"
+                    Timestamp       = "Created: $($file.CreationTime.ToString('yyyy-MM-dd HH:mm:ss')) | Modified: $($file.LastWriteTime.ToString('yyyy-MM-dd HH:mm:ss'))"
                     Name            = $file.Name
                     Value           = $file.FullName
                     SHA1            = $hashes.SHA1
@@ -1729,6 +1729,7 @@ function Get-PSHistory {
             Show-Banner
             Write-Host "===============================================================" -ForegroundColor DarkCyan
             Write-Host "  PSREADLINE HISTORY (LAST 50 COMMANDS)" -ForegroundColor Yellow
+            Write-Host "  File Created : $($fileInfo.CreationTime.ToString('yyyy-MM-dd HH:mm:ss'))" -ForegroundColor DarkGray
             Write-Host "  File Modified: $($fileInfo.LastWriteTime.ToString('yyyy-MM-dd HH:mm:ss'))" -ForegroundColor DarkGray
             Write-Host "===============================================================" -ForegroundColor DarkCyan
             Write-Host " ---------------------------------------------------" -ForegroundColor DarkGray
@@ -2087,7 +2088,7 @@ function Get-RecentlyWrittenFiles {
                         $results += [PSCustomObject]@{
                             Type            = "Recently Written File"
                             User            = $owner
-                            Timestamp       = "Written: $($file.LastWriteTime.ToString('yyyy-MM-dd HH:mm:ss'))"
+                            Timestamp       = "Created: $($file.CreationTime.ToString('yyyy-MM-dd HH:mm:ss')) | Modified: $($file.LastWriteTime.ToString('yyyy-MM-dd HH:mm:ss'))"
                             Name            = $file.Name
                             Value           = $file.FullName
                             SHA1            = $hashes.SHA1
