@@ -2897,6 +2897,7 @@ function Show-Menu {
     Write-Host ""
     Write-Host "  ---------------------------------------------------------------" -ForegroundColor DarkGray
     Write-Host "  [Q]  Quit (returns to shell)" -ForegroundColor Red
+    Write-Host "  [D]  Exit and Delete Riposte from this device" -ForegroundColor Red
     Write-Host "  ---------------------------------------------------------------" -ForegroundColor DarkGray
     Write-Host ""
     
@@ -2941,6 +2942,9 @@ function Show-Menu {
     elseif ($choice -eq 'Q' -or $choice -eq 'q') {
         return $true
     }
+    elseif ($choice -eq 'D' -or $choice -eq 'd') {
+        return 'destruct'
+    }
     else {
         Write-Host "[-] Invalid selection." -ForegroundColor Red
         Start-Sleep -Seconds 1
@@ -2951,8 +2955,56 @@ function Show-Menu {
 while ($true) {
     $quit = Show-Menu
     if ($quit -eq $true) {
-        Clear-Host
         Write-Host "[+] Riposte exited. Shell session preserved." -ForegroundColor Green
+        break
+    }
+    if ($quit -eq 'destruct') {
+        $scriptPath  = $MyInvocation.MyCommand.Path
+        $parentDir   = Split-Path $scriptPath -Parent
+        $parentName  = Split-Path $parentDir -Leaf
+
+        Write-Host ""
+        Write-Host "  [!] EXIT AND DELETE" -ForegroundColor Red
+        Write-Host "  Script : $scriptPath" -ForegroundColor DarkGray
+        if ($parentName -eq 'Riposte') {
+            Write-Host "  Folder : $parentDir (will be deleted)" -ForegroundColor DarkGray
+        } else {
+            Write-Host "  Folder : $parentDir (will NOT be deleted - not named 'Riposte')" -ForegroundColor DarkGray
+        }
+        Write-Host ""
+        Write-Host "  Press Q to return to shell without deleting." -ForegroundColor Red
+        $confirm = Read-Host "  [?] Type YES to confirm deletion or Q to cancel"
+
+        if ($confirm -eq 'Q' -or $confirm -eq 'q') {
+            Write-Host "[+] Cancelled. Returning to shell." -ForegroundColor Green
+            break
+        }
+
+        if ($confirm -ne 'YES') {
+            Write-Host "[-] Invalid confirmation. Type YES exactly. Returning to shell." -ForegroundColor Red
+            break
+        }
+
+        if ($parentName -eq 'Riposte') {
+            # Delete file and entire Riposte folder
+            try {
+                Remove-Item -Path $parentDir -Recurse -Force -ErrorAction Stop
+                Write-Host "[+] Riposte folder deleted: $parentDir" -ForegroundColor Green
+            } catch {
+                Write-Host "[-] Failed to delete folder: $_" -ForegroundColor Red
+                # Try deleting just the file as fallback
+                try { Remove-Item -Path $scriptPath -Force -ErrorAction Stop } catch {}
+            }
+        } else {
+            # Delete file only
+            try {
+                Remove-Item -Path $scriptPath -Force -ErrorAction Stop
+                Write-Host "[+] Riposte.ps1 deleted: $scriptPath" -ForegroundColor Green
+            } catch {
+                Write-Host "[-] Failed to delete file: $_" -ForegroundColor Red
+            }
+        }
+        Write-Host "[+] Shell session preserved." -ForegroundColor Green
         break
     }
 }
