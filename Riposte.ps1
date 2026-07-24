@@ -2986,13 +2986,13 @@ while ($true) {
         }
 
         if ($parentName -eq 'Riposte') {
-            # Delete file and entire Riposte folder
+            # Change out of the folder before deleting it
+            Set-Location "C:\" -ErrorAction SilentlyContinue
             try {
                 Remove-Item -Path $parentDir -Recurse -Force -ErrorAction Stop
                 Write-Host "[+] Riposte folder deleted: $parentDir" -ForegroundColor Green
             } catch {
                 Write-Host "[-] Failed to delete folder: $_" -ForegroundColor Red
-                # Try deleting just the file as fallback
                 try { Remove-Item -Path $scriptPath -Force -ErrorAction Stop } catch {}
             }
         } else {
