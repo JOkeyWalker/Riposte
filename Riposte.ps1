@@ -2054,10 +2054,31 @@ function Get-RecentlyWrittenFiles {
     $searchPaths = @()
     $userDirs = Get-ChildItem -Path "C:\Users" -Directory -Force -ErrorAction SilentlyContinue | Where-Object { $_.Name -notin @("All Users", "Default", "Default User", "Public") }
     
+    # Subdirectories of AppData\Local too noisy to scan fully (browser caches, package caches etc.)
+    $appDataLocalExcludes = @(
+        "Google","Microsoft","BraveSoftware","Mozilla","Package Cache",
+        "Packages","Programs","pip","conda","npm","nuget","yarn","Pub",
+        "D3DSCache","FontCache","CrashDumps","VirtualStore","History",
+        "Comms","ConnectedDevicesPlatform","PlaceholderTileLogoFolder"
+    )
+
     foreach ($ud in $userDirs) {
         $searchPaths += Join-Path $ud.FullName "Downloads"
-        $searchPaths += Join-Path $ud.FullName "AppData\Local\Temp"
         $searchPaths += Join-Path $ud.FullName "Desktop"
+        $searchPaths += Join-Path $ud.FullName "AppData\Local\Temp"
+        $searchPaths += Join-Path $ud.FullName "AppData\Roaming\Microsoft\Windows\Start Menu\Programs\Startup"
+
+        # Scan AppData\Local subfolders individually, skipping known-noisy ones
+        $appLocalBase = Join-Path $ud.FullName "AppData\Local"
+        if (Test-Path $appLocalBase) {
+            Get-ChildItem $appLocalBase -Directory -ErrorAction SilentlyContinue |
+                Where-Object { $_.Name -notin $appDataLocalExcludes } |
+                ForEach-Object { $searchPaths += $_.FullName }
+        }
+
+        # AppData\Roaming common drop locations
+        $searchPaths += Join-Path $ud.FullName "AppData\Roaming\Microsoft\Windows\Start Menu\Programs"
+        $searchPaths += Join-Path $ud.FullName "AppData\Roaming"
     }
     $searchPaths += "C:\Users\Public"
     $searchPaths += @("C:\ProgramData", "C:\Windows\Temp", "C:\Temp")
