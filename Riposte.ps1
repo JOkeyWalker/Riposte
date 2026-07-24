@@ -2986,14 +2986,19 @@ while ($true) {
         }
 
         if ($parentName -eq 'Riposte') {
-            # Change out of the folder before deleting it
-            Set-Location "C:\" -ErrorAction SilentlyContinue
+            # Schedule folder deletion via cmd.exe after PowerShell exits
+            # This bypasses the lock PowerShell holds on its own working directory
+            # Move off the folder using the drive root, not hardcoded C:\
+            $driveRoot = Split-Path -Qualifier $parentDir
+            Set-Location "$driveRoot\" -ErrorAction SilentlyContinue
             try {
-                Remove-Item -Path $parentDir -Recurse -Force -ErrorAction Stop
-                Write-Host "[+] Riposte folder deleted: $parentDir" -ForegroundColor Green
+                # Use cmd /c rd to delete after a short delay, runs detached from this process
+                $rdCmd = "timeout /t 2 /nobreak >nul & rd /s /q `"$parentDir`""
+                Start-Process -FilePath "cmd.exe" -ArgumentList "/c $rdCmd" -WindowStyle Hidden
+                Write-Host "[+] Riposte folder queued for deletion: $parentDir" -ForegroundColor Green
+                Write-Host "    (Deletion completes in ~2 seconds after shell returns)" -ForegroundColor DarkGray
             } catch {
-                Write-Host "[-] Failed to delete folder: $_" -ForegroundColor Red
-                try { Remove-Item -Path $scriptPath -Force -ErrorAction Stop } catch {}
+                Write-Host "[-] Failed to queue folder deletion: $_" -ForegroundColor Red
             }
         } else {
             # Delete file only
