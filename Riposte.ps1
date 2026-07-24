@@ -2881,7 +2881,7 @@ function Show-Menu {
     Write-Host "  [" -NoNewline -ForegroundColor White; Write-Host "6" -NoNewline -ForegroundColor Cyan; Write-Host "]  Broad Event Log Search" -ForegroundColor White
     Write-Host "       Search Security, System, RDP, Tasks, PowerShell logs by keyword" -ForegroundColor DarkGray
     Write-Host ""
-    Write-Host "  CLICKFIX / DRIVE-BY TRIAGE  |  " -NoNewline -ForegroundColor Yellow; Write-Host "Triage ClickFix / Drive-By" -ForegroundColor DarkGray
+    Write-Host "  CLICKFIX / DRIVE-BY TRIAGE" -ForegroundColor Yellow
     Write-Host "  ---------------------------------------------------------------" -ForegroundColor DarkGray
     Write-Host "  [" -NoNewline -ForegroundColor White; Write-Host "7" -NoNewline -ForegroundColor Cyan; Write-Host "]  Recently Written Files Hunt" -ForegroundColor White
     Write-Host "       Detect files dropped during ClickFix or drive-by attacks" -ForegroundColor DarkGray
@@ -2893,7 +2893,7 @@ function Show-Menu {
     Write-Host "  [" -NoNewline -ForegroundColor White; Write-Host "10" -NoNewline -ForegroundColor Cyan; Write-Host "]  DFIR System Info" -ForegroundColor White
     Write-Host "       OS baseline, network config, local admins, AV posture" -ForegroundColor DarkGray
     Write-Host "  [" -NoNewline -ForegroundColor White; Write-Host "11" -NoNewline -ForegroundColor Cyan; Write-Host "]  Browser Forensics" -ForegroundColor White
-    Write-Host "       Extensions and notification permissions across Chrome, Edge, Brave, Firefox" -ForegroundColor DarkGray
+    Write-Host "       Extensions & notification perms across Chrome, Edge, Brave, Firefox" -ForegroundColor DarkGray
     Write-Host ""
     Write-Host "  ---------------------------------------------------------------" -ForegroundColor DarkGray
     Write-Host "  [Q]  Quit (returns to shell)" -ForegroundColor Red
