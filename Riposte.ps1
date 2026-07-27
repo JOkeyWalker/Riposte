@@ -388,6 +388,67 @@ function Get-RegistryRunKeys {
     return $results
 }
 
+function Get-FileLockHolders {
+    param([string]$filePath)
+    $holders = [System.Collections.Generic.List[PSCustomObject]]::new()
+    $fileName = [System.IO.Path]::GetFileName($filePath)
+    $allProcs = Get-CimInstance Win32_Process -ErrorAction SilentlyContinue
+
+    foreach ($proc in $allProcs) {
+        $matched = $false
+
+        # Check executable path exact match
+        if ($proc.ExecutablePath -and $proc.ExecutablePath -eq $filePath) { $matched = $true }
+
+        # Check if process is loading this as a DLL/module
+        if (-not $matched -and $proc.ProcessId -gt 0) {
+            try {
+                $psProc = Get-Process -Id $proc.ProcessId -ErrorAction SilentlyContinue
+                if ($psProc -and $psProc.Modules) {
+                    foreach ($mod in $psProc.Modules) {
+                        if ($mod.FileName -ieq $filePath) { $matched = $true; break }
+                    }
+                }
+            } catch {}
+        }
+
+        if ($matched) {
+            # Check if there is a service associated with this process
+            $svcName = $null
+            try {
+                $svc = Get-CimInstance Win32_Service -Filter "ProcessId=$($proc.ProcessId)" -ErrorAction SilentlyContinue | Select-Object -First 1
+                if ($svc) { $svcName = $svc.Name }
+            } catch {}
+
+            $holders.Add([PSCustomObject]@{
+                PID         = $proc.ProcessId
+                ProcessName = $proc.Name
+                ExePath     = $proc.ExecutablePath
+                ServiceName = $svcName
+            })
+        }
+    }
+
+    # Also check services whose binary path contains the file
+    try {
+        $services = Get-CimInstance Win32_Service -ErrorAction SilentlyContinue |
+            Where-Object { $_.PathName -and $_.PathName -like "*$fileName*" -and $_.State -eq 'Running' }
+        foreach ($svc in $services) {
+            $alreadyAdded = $holders | Where-Object { $_.ServiceName -eq $svc.Name }
+            if (-not $alreadyAdded) {
+                $holders.Add([PSCustomObject]@{
+                    PID         = $svc.ProcessId
+                    ProcessName = $svc.Name
+                    ExePath     = $svc.PathName
+                    ServiceName = $svc.Name
+                })
+            }
+        }
+    } catch {}
+
+    return $holders
+}
+
 function Invoke-Remediation {
     param([PSCustomObject]$item)
 
@@ -470,19 +531,77 @@ function Invoke-Remediation {
             }
 
             "File" {
-                if (Test-Path $path) {
-                    # Kill any process holding this file first
-                    $procs = Get-CimInstance Win32_Process | Where-Object { $_.ExecutablePath -like "*$path*" }
-                    foreach ($proc in $procs) {
-                        Stop-Process -Id $proc.ProcessId -Force -ErrorAction SilentlyContinue
-                    }
-                    Remove-Item -Path $path -Recurse -Force -ErrorAction Stop
-                    Write-Host "  [+] File/folder removed: $path" -ForegroundColor Green
-                } else {
+                if (-not (Test-Path $path)) {
                     Write-Host "  [-] Path not found: $path" -ForegroundColor Red
                     return $false
                 }
-                return $true
+
+                # First attempt
+                try {
+                    Remove-Item -Path $path -Recurse -Force -ErrorAction Stop
+                    Write-Host "  [+] File/folder removed: $path" -ForegroundColor Green
+                    return $true
+                } catch {
+                    Write-Host "  [!] Deletion failed: $_" -ForegroundColor Red
+                    Write-Host "  [*] Searching for processes/services holding this file..." -ForegroundColor Yellow
+                }
+
+                # Find lock holders
+                $holders = Get-FileLockHolders -filePath $path
+                if ($holders.Count -eq 0) {
+                    Write-Host "  [-] No processes found holding this file." -ForegroundColor DarkGray
+                    Write-Host "      It may be locked by AV, a kernel driver, or Windows Explorer." -ForegroundColor DarkGray
+                    return $false
+                }
+
+                Write-Host ""
+                Write-Host "  [!] The following are actively using this file:" -ForegroundColor Red
+                foreach ($h in $holders) {
+                    Write-Host "      PID $($h.PID) | $($h.ProcessName)" -NoNewline -ForegroundColor Yellow
+                    if ($h.ServiceName) { Write-Host " (Service: $($h.ServiceName))" -NoNewline -ForegroundColor Cyan }
+                    Write-Host ""
+                    Write-Host "      Path: $($h.ExePath)" -ForegroundColor DarkGray
+                }
+                Write-Host ""
+
+                $stopConfirm = Read-Host "  [?] Stop these processes/services and retry deletion? (Y/N)"
+                if ($stopConfirm -ne 'Y' -and $stopConfirm -ne 'y') {
+                    Write-Host "  [-] Skipped." -ForegroundColor DarkGray
+                    return $false
+                }
+
+                foreach ($h in $holders) {
+                    # Stop service first if associated
+                    if ($h.ServiceName) {
+                        try {
+                            Stop-Service -Name $h.ServiceName -Force -ErrorAction Stop
+                            Write-Host "  [+] Service stopped: $($h.ServiceName)" -ForegroundColor Green
+                        } catch {
+                            Write-Host "  [-] Could not stop service $($h.ServiceName): $_" -ForegroundColor Red
+                        }
+                    }
+                    # Kill the process
+                    try {
+                        Stop-Process -Id $h.PID -Force -ErrorAction Stop
+                        Write-Host "  [+] Process terminated: PID $($h.PID) ($($h.ProcessName))" -ForegroundColor Green
+                    } catch {
+                        Write-Host "  [-] Could not stop PID $($h.PID): $_" -ForegroundColor Red
+                    }
+                }
+
+                # Brief pause for handles to release
+                Start-Sleep -Milliseconds 500
+
+                # Retry deletion
+                try {
+                    Remove-Item -Path $path -Recurse -Force -ErrorAction Stop
+                    Write-Host "  [+] File/folder removed: $path" -ForegroundColor Green
+                    return $true
+                } catch {
+                    Write-Host "  [!] Deletion still failed after stopping processes: $_" -ForegroundColor Red
+                    Write-Host "      The file may be held by AV, a kernel driver, or Windows itself." -ForegroundColor DarkGray
+                    return $false
+                }
             }
 
             "Process" {
@@ -2079,6 +2198,8 @@ function Get-RecentlyWrittenFiles {
         # AppData\Roaming common drop locations
         $searchPaths += Join-Path $ud.FullName "AppData\Roaming\Microsoft\Windows\Start Menu\Programs"
         $searchPaths += Join-Path $ud.FullName "AppData\Roaming"
+        # Specific Microsoft subpaths known to be used as drop locations
+        $searchPaths += Join-Path $ud.FullName "AppData\Local\Microsoft\Windows\Caches"
     }
     $searchPaths += "C:\Users\Public"
     $searchPaths += @("C:\ProgramData", "C:\Windows\Temp", "C:\Temp")
