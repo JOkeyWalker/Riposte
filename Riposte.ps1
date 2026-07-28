@@ -3007,34 +3007,34 @@ function Show-Menu {
     Show-Banner
     Write-Host "  THREAT HUNTING  |  " -NoNewline -ForegroundColor Yellow; Write-Host "La Traque des Menaces" -ForegroundColor DarkGray
     Write-Host "  ---------------------------------------------------------------" -ForegroundColor DarkGray
-    Write-Host "  [" -NoNewline -ForegroundColor White; Write-Host "1" -NoNewline -ForegroundColor Cyan; Write-Host "]  Hunt for Persistence" -ForegroundColor White
+    Write-Host "  [1]  Hunt for Persistence" -ForegroundColor White
     Write-Host "       Registry Run Keys, Scheduled Tasks, Startup, Services" -ForegroundColor DarkGray
-    Write-Host "  [" -NoNewline -ForegroundColor White; Write-Host "2" -NoNewline -ForegroundColor Cyan; Write-Host "]  Global Keyword Hunt" -ForegroundColor White
+    Write-Host "  [2]  Global Keyword Hunt" -ForegroundColor White
     Write-Host "       Registry, Tasks, Services, Processes, File System" -ForegroundColor DarkGray
-    Write-Host "  [" -NoNewline -ForegroundColor White; Write-Host "3" -NoNewline -ForegroundColor Cyan; Write-Host "]  SentinelOne Threat Detail Hunt" -ForegroundColor White
+    Write-Host "  [3]  SentinelOne Threat Detail Hunt" -ForegroundColor White
     Write-Host "       Paste S1 alert details to hunt IOCs across the endpoint" -ForegroundColor DarkGray
-    Write-Host "  [" -NoNewline -ForegroundColor White; Write-Host "4" -NoNewline -ForegroundColor Cyan; Write-Host "]  RMM Software Hunt" -ForegroundColor White
+    Write-Host "  [4]  RMM Software Hunt" -ForegroundColor White
     Write-Host "       Detect AnyDesk, ScreenConnect, TeamViewer, and 20+ RMM tools" -ForegroundColor DarkGray
     Write-Host ""
     Write-Host "  EXECUTION & PROCESS ANALYSIS  |  " -NoNewline -ForegroundColor Yellow; Write-Host "Execution & Processus" -ForegroundColor DarkGray
     Write-Host "  ---------------------------------------------------------------" -ForegroundColor DarkGray
-    Write-Host "  [" -NoNewline -ForegroundColor White; Write-Host "5" -NoNewline -ForegroundColor Cyan; Write-Host "]  PowerShell Execution History" -ForegroundColor White
+    Write-Host "  [5]  PowerShell Execution History" -ForegroundColor White
     Write-Host "       Event Log (ID 4104) with timeframe filter" -ForegroundColor DarkGray
-    Write-Host "  [" -NoNewline -ForegroundColor White; Write-Host "6" -NoNewline -ForegroundColor Cyan; Write-Host "]  Broad Event Log Search" -ForegroundColor White
+    Write-Host "  [6]  Broad Event Log Search" -ForegroundColor White
     Write-Host "       Search Security, System, RDP, Tasks, PowerShell logs by keyword" -ForegroundColor DarkGray
     Write-Host ""
     Write-Host "  CLICKFIX / DRIVE-BY TRIAGE" -ForegroundColor Yellow
     Write-Host "  ---------------------------------------------------------------" -ForegroundColor DarkGray
-    Write-Host "  [" -NoNewline -ForegroundColor White; Write-Host "7" -NoNewline -ForegroundColor Cyan; Write-Host "]  Recently Written Files Hunt" -ForegroundColor White
+    Write-Host "  [7]  Recently Written Files Hunt" -ForegroundColor White
     Write-Host "       Detect files dropped during ClickFix or drive-by attacks" -ForegroundColor DarkGray
-    Write-Host "  [" -NoNewline -ForegroundColor White; Write-Host "8" -NoNewline -ForegroundColor Cyan; Write-Host "]  RunMRU Execution Hunt" -ForegroundColor White
+    Write-Host "  [8]  RunMRU Execution Hunt" -ForegroundColor White
     Write-Host "       Run dialog history across all user profiles" -ForegroundColor DarkGray
     Write-Host ""
     Write-Host "  FORENSICS  |  " -NoNewline -ForegroundColor Yellow; Write-Host "Investigation Numerique" -ForegroundColor DarkGray
     Write-Host "  ---------------------------------------------------------------" -ForegroundColor DarkGray
-    Write-Host "  [" -NoNewline -ForegroundColor White; Write-Host "10" -NoNewline -ForegroundColor Cyan; Write-Host "]  DFIR System Info" -ForegroundColor White
+    Write-Host "  [9]  DFIR System Info" -ForegroundColor White
     Write-Host "       OS baseline, network config, local admins, AV posture" -ForegroundColor DarkGray
-    Write-Host "  [" -NoNewline -ForegroundColor White; Write-Host "11" -NoNewline -ForegroundColor Cyan; Write-Host "]  Browser Forensics" -ForegroundColor White
+    Write-Host "  [10] Browser Forensics" -ForegroundColor White
     Write-Host "       Extensions & notification perms across Chrome, Edge, Brave, Firefox" -ForegroundColor DarkGray
     Write-Host ""
     Write-Host "  ---------------------------------------------------------------" -ForegroundColor DarkGray
@@ -3042,9 +3042,9 @@ function Show-Menu {
     Write-Host "  [D]  Exit and Delete Riposte from this device" -ForegroundColor Red
     Write-Host "  ---------------------------------------------------------------" -ForegroundColor DarkGray
     Write-Host ""
-    
+
     $choice = Repair-Input (Read-Host " [?] Select an option")
-    
+
     if ($choice -eq '1') {
         $data = Get-Persistence
         if ($data) {
@@ -3075,10 +3075,10 @@ function Show-Menu {
     elseif ($choice -eq '8') {
         Get-RunMRU
     }
-    elseif ($choice -eq '10') {
+    elseif ($choice -eq '9') {
         Get-SystemInfo
     }
-    elseif ($choice -eq '11') {
+    elseif ($choice -eq '10') {
         Get-BrowserForensics
     }
     elseif ($choice -eq 'Q' -or $choice -eq 'q') {
@@ -3087,6 +3087,11 @@ function Show-Menu {
     elseif ($choice -eq 'D' -or $choice -eq 'd') {
         return 'destruct'
     }
+    else {
+        Write-Host "[-] Invalid selection." -ForegroundColor Red
+        Start-Sleep -Seconds 1
+    }
+}
     else {
         Write-Host "[-] Invalid selection." -ForegroundColor Red
         Start-Sleep -Seconds 1
