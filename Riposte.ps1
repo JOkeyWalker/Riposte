@@ -3041,9 +3041,7 @@ function Show-Menu {
     Write-Host "  [Q]  Quit (returns to shell)" -ForegroundColor Red
     Write-Host "  [D]  Exit and Delete Riposte from this device" -ForegroundColor Red
     Write-Host "  ---------------------------------------------------------------" -ForegroundColor DarkGray
-
     $choice = Repair-Input (Read-Host " [?] Select an option")
-
     if ($choice -eq '1') {
         $data = Get-Persistence
         if ($data) {
@@ -3053,39 +3051,17 @@ function Show-Menu {
             Pause
         }
     }
-    elseif ($choice -eq '2') {
-        Search-GlobalKeyword
-    }
-    elseif ($choice -eq '3') {
-        Get-S1ThreatHunt
-    }
-    elseif ($choice -eq '4') {
-        Get-RMMHunt
-    }
-    elseif ($choice -eq '5') {
-        Get-PSHistory
-    }
-    elseif ($choice -eq '6') {
-        Get-EventLogSearch
-    }
-    elseif ($choice -eq '7') {
-        Get-RecentlyWrittenFiles
-    }
-    elseif ($choice -eq '8') {
-        Get-RunMRU
-    }
-    elseif ($choice -eq '9') {
-        Get-SystemInfo
-    }
-    elseif ($choice -eq '10') {
-        Get-BrowserForensics
-    }
-    elseif ($choice -eq 'Q' -or $choice -eq 'q') {
-        return $true
-    }
-    elseif ($choice -eq 'D' -or $choice -eq 'd') {
-        return 'destruct'
-    }
+    elseif ($choice -eq '2') { Search-GlobalKeyword }
+    elseif ($choice -eq '3') { Get-S1ThreatHunt }
+    elseif ($choice -eq '4') { Get-RMMHunt }
+    elseif ($choice -eq '5') { Get-PSHistory }
+    elseif ($choice -eq '6') { Get-EventLogSearch }
+    elseif ($choice -eq '7') { Get-RecentlyWrittenFiles }
+    elseif ($choice -eq '8') { Get-RunMRU }
+    elseif ($choice -eq '9') { Get-SystemInfo }
+    elseif ($choice -eq '10') { Get-BrowserForensics }
+    elseif ($choice -eq 'Q' -or $choice -eq 'q') { return $true }
+    elseif ($choice -eq 'D' -or $choice -eq 'd') { return 'destruct' }
     else {
         Write-Host "[-] Invalid selection." -ForegroundColor Red
         Start-Sleep -Seconds 1
