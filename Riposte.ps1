@@ -3092,11 +3092,6 @@ function Show-Menu {
         Start-Sleep -Seconds 1
     }
 }
-    else {
-        Write-Host "[-] Invalid selection." -ForegroundColor Red
-        Start-Sleep -Seconds 1
-    }
-}
 
 # Main Loop
 while ($true) {
