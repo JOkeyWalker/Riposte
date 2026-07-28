@@ -3041,7 +3041,6 @@ function Show-Menu {
     Write-Host "  [Q]  Quit (returns to shell)" -ForegroundColor Red
     Write-Host "  [D]  Exit and Delete Riposte from this device" -ForegroundColor Red
     Write-Host "  ---------------------------------------------------------------" -ForegroundColor DarkGray
-    Write-Host ""
 
     $choice = Repair-Input (Read-Host " [?] Select an option")
 
