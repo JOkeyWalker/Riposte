@@ -3005,7 +3005,7 @@ function Get-SystemInfo {
 
 function Show-Menu {
     Show-Banner
-    Write-Host "  THREAT HUNTING  |  " -NoNewline -ForegroundColor Yellow; Write-Host "La Traque des Menaces" -ForegroundColor DarkGray
+    Write-Host "  THREAT HUNTING  |  La Traque des Menaces" -ForegroundColor Yellow
     Write-Host "  ---------------------------------------------------------------" -ForegroundColor DarkGray
     Write-Host "  [1]  Hunt for Persistence" -ForegroundColor White
     Write-Host "       Registry Run Keys, Scheduled Tasks, Startup, Services" -ForegroundColor DarkGray
@@ -3016,7 +3016,7 @@ function Show-Menu {
     Write-Host "  [4]  RMM Software Hunt" -ForegroundColor White
     Write-Host "       Detect AnyDesk, ScreenConnect, TeamViewer, and 20+ RMM tools" -ForegroundColor DarkGray
     Write-Host ""
-    Write-Host "  EXECUTION & PROCESS ANALYSIS  |  " -NoNewline -ForegroundColor Yellow; Write-Host "Execution & Processus" -ForegroundColor DarkGray
+    Write-Host "  EXECUTION & PROCESS ANALYSIS  |  Execution & Processus" -ForegroundColor Yellow
     Write-Host "  ---------------------------------------------------------------" -ForegroundColor DarkGray
     Write-Host "  [5]  PowerShell Execution History" -ForegroundColor White
     Write-Host "       Event Log (ID 4104) with timeframe filter" -ForegroundColor DarkGray
@@ -3030,7 +3030,7 @@ function Show-Menu {
     Write-Host "  [8]  RunMRU Execution Hunt" -ForegroundColor White
     Write-Host "       Run dialog history across all user profiles" -ForegroundColor DarkGray
     Write-Host ""
-    Write-Host "  FORENSICS  |  " -NoNewline -ForegroundColor Yellow; Write-Host "Investigation Numerique" -ForegroundColor DarkGray
+    Write-Host "  FORENSICS  |  Investigation Numerique" -ForegroundColor Yellow
     Write-Host "  ---------------------------------------------------------------" -ForegroundColor DarkGray
     Write-Host "  [9]  DFIR System Info" -ForegroundColor White
     Write-Host "       OS baseline, network config, local admins, AV posture" -ForegroundColor DarkGray
