@@ -2560,7 +2560,7 @@ function Get-RunMRU {
                             Type            = "RunMRU Command"
                             User            = $username
                             Timestamp       = "Registry key: $($prop.Name)"
-                            Name            = $cleanValue
+                            Name            = ($cleanValue -split ' ')[0]
                             Value           = $cleanValue
                             SHA1            = "N/A"
                             SHA256          = "N/A"
@@ -2605,7 +2605,7 @@ function Get-RunMRU {
                                     Type            = "RunMRU Command"
                                     User            = "$($profile.Name) (Offline)"
                                     Timestamp       = "Registry key: $($prop.Name)"
-                                    Name            = $cleanValue
+                                    Name            = ($cleanValue -split ' ')[0]
                                     Value           = $cleanValue
                                     SHA1            = "N/A"
                                     SHA256          = "N/A"
