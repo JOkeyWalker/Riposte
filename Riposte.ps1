@@ -292,7 +292,7 @@ function Get-RegistryRunKeys {
         }
         
         # 2. Loaded HKU Run Keys (Active Users)
-        $loadedSids = Get-ChildItem HKU: | Where-Object { $_.PSChildName -notmatch '_Classes$' -and $_.PSChildName -match '^S-1-5' }
+        $loadedSids = Get-ChildItem HKU: | Where-Object { $_.PSChildName -notmatch '_Classes$' -and $_.PSChildName -match '^S-1-' }
         foreach ($sidObj in $loadedSids) {
             $sid = $sidObj.PSChildName
             $username = Resolve-SidToUsername -sid $sid
@@ -1435,11 +1435,25 @@ function Get-PSHistory {
                 Write-Host " [+] Timestamp : $($res.Time)" -ForegroundColor Cyan
                 Write-Host "     User      : $($res.User)" -ForegroundColor Yellow
                 Write-Host "     Command   :" -ForegroundColor White
-                
-                $scriptLines = $res.ScriptBlock -split "`r?`n" | Where-Object { $_.Trim() }
+
+                $fullScript  = $res.ScriptBlock
+                $charLimit   = 2000
+                $truncated   = $fullScript.Length -gt $charLimit
+                $displayText = if ($truncated) { $fullScript.Substring(0, $charLimit) } else { $fullScript }
+
+                $scriptLines = $displayText -split "`r?`n" | Where-Object { $_.Trim() }
                 foreach ($line in $scriptLines) {
                     Write-Host "       $line" -ForegroundColor Green
                 }
+
+                if ($truncated) {
+                    $remaining = $fullScript.Length - $charLimit
+                    Write-Host ""
+                    Write-Host "       [... $remaining additional characters not displayed]" -ForegroundColor Yellow
+                    Write-Host "       Script block exceeds 2,000 characters. To view in full, run:" -ForegroundColor DarkGray
+                    Write-Host "       Get-WinEvent -FilterHashtable @{LogName='Microsoft-Windows-PowerShell/Operational'; Id=4104} | Where-Object { `$_.TimeCreated -ge [datetime]'$($res.Time)' -and `$_.TimeCreated -le [datetime]'$($res.Time)'.AddSeconds(1) } | Select-Object -ExpandProperty Message" -ForegroundColor Cyan
+                }
+
                 Write-Host " ---------------------------------------------------" -ForegroundColor DarkGray
             }
             
@@ -1553,6 +1567,7 @@ function Invoke-EventLogSearch {
             if ($target.IDs.Count -gt 0) { $filter['Id'] = $target.IDs }
 
             $events = Get-WinEvent -FilterHashtable $filter -MaxEvents 10000 -ErrorAction Stop
+            if ($events.Count -eq 10000) { Write-Host "  [!] WARNING: $shortLog hit the 10,000 event cap - results may be incomplete." -ForegroundColor Red }
 
             foreach ($evt in $events) {
                 if ($evt.TimeCreated -ge $huntStartTime) { continue }
@@ -1827,6 +1842,7 @@ function Get-EventLogSearch {
             if ($target.IDs.Count -gt 0) { $filter['Id'] = $target.IDs }
 
             $events = Get-WinEvent -FilterHashtable $filter -MaxEvents 10000 -ErrorAction Stop
+            if ($events.Count -eq 10000) { Write-Host "  [!] WARNING: $shortLog hit the 10,000 event cap - results may be incomplete." -ForegroundColor Red }
 
             foreach ($evt in $events) {
                 if ($evt.TimeCreated -ge $huntStartTime) { continue }
@@ -2152,20 +2168,25 @@ function Get-RunMRU {
             $path = "HKU:\$sid\Software\Microsoft\Windows\CurrentVersion\Explorer\RunMRU"
             if (Test-Path $path) {
                 $properties = Get-ItemProperty -Path $path
-                foreach ($prop in $properties.psobject.properties) {
-                    if ($prop.Name -match '^[a-z]$') { 
-                        $cleanValue = $prop.Value -replace '\\\d+$', '' -replace '\x00', ''
-                        $results += [PSCustomObject]@{
-                            Type            = "RunMRU Command"
-                            User            = $username
-                            Timestamp       = "Registry key: $($prop.Name)"
-                            Name            = ($cleanValue -split ' ')[0]
-                            Value           = $cleanValue
-                            SHA1            = "N/A"
-                            SHA256          = "N/A"
-                            RemediationType = "Registry"
-                            RemediationPath = $path
-                        }
+                # Read MRUList to get chronological order (most recent first)
+                $mruOrder = $properties.MRUList
+                $orderedKeys = if ($mruOrder) { $mruOrder.ToCharArray() } else {
+                    $properties.psobject.properties | Where-Object { $_.Name -match '^[a-z]$' } | ForEach-Object { $_.Name[0] }
+                }
+                foreach ($key in $orderedKeys) {
+                    $prop = $properties.psobject.properties | Where-Object { $_.Name -eq [string]$key } | Select-Object -First 1
+                    if (-not $prop) { continue }
+                    $cleanValue = $prop.Value -replace '\\\d+$', '' -replace '\x00', ''
+                    $results += [PSCustomObject]@{
+                        Type            = "RunMRU Command"
+                        User            = $username
+                        Timestamp       = "Order: Most recent first"
+                        Name            = ($cleanValue -split ' ')[0]
+                        Value           = $cleanValue
+                        SHA1            = "N/A"
+                        SHA256          = "N/A"
+                        RemediationType = "Registry"
+                        RemediationPath = $path
                     }
                 }
             }
@@ -2197,20 +2218,24 @@ function Get-RunMRU {
                     $path = "HKU:\$tempHiveName\Software\Microsoft\Windows\CurrentVersion\Explorer\RunMRU"
                     if (Test-Path $path) {
                         $properties = Get-ItemProperty -Path $path
-                        foreach ($prop in $properties.psobject.properties) {
-                            if ($prop.Name -match '^[a-z]$') {
-                                $cleanValue = $prop.Value -replace '\\\d+$', '' -replace '\x00', ''
-                                $results += [PSCustomObject]@{
-                                    Type            = "RunMRU Command"
-                                    User            = "$($profile.Name) (Offline)"
-                                    Timestamp       = "Registry key: $($prop.Name)"
-                                    Name            = ($cleanValue -split ' ')[0]
-                                    Value           = $cleanValue
-                                    SHA1            = "N/A"
-                                    SHA256          = "N/A"
-                                    RemediationType = "Registry"
-                                    RemediationPath = $path
-                                }
+                        $mruOrder = $properties.MRUList
+                        $orderedKeys = if ($mruOrder) { $mruOrder.ToCharArray() } else {
+                            $properties.psobject.properties | Where-Object { $_.Name -match '^[a-z]$' } | ForEach-Object { $_.Name[0] }
+                        }
+                        foreach ($key in $orderedKeys) {
+                            $prop = $properties.psobject.properties | Where-Object { $_.Name -eq [string]$key } | Select-Object -First 1
+                            if (-not $prop) { continue }
+                            $cleanValue = $prop.Value -replace '\\\d+$', '' -replace '\x00', ''
+                            $results += [PSCustomObject]@{
+                                Type            = "RunMRU Command"
+                                User            = "$($profile.Name) (Offline)"
+                                Timestamp       = "Order: Most recent first"
+                                Name            = ($cleanValue -split ' ')[0]
+                                Value           = $cleanValue
+                                SHA1            = "N/A"
+                                SHA256          = "N/A"
+                                RemediationType = "Registry"
+                                RemediationPath = $path
                             }
                         }
                     }
