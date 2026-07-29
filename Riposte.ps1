@@ -115,26 +115,6 @@ function Get-AssociatedUser {
     return "SYSTEM / All Users"
 }
 
-function Resolve-S1Path {
-    param([string]$rawPath)
-    if (-not $rawPath) { return $null }
-    
-    # Strip S1 raw device prefix (e.g., \Device\HarddiskVolume3)
-    $relativePath = $rawPath -replace '^\\Device\\HarddiskVolume\d+', ''
-    
-    # Dynamically check active drive letters to find where the file actually lives
-    $drives = @($env:SystemDrive, "C:", "D:", "E:", "F:")
-    foreach ($drive in $drives) {
-        $testPath = Join-Path $drive $relativePath
-        if (Test-Path $testPath) {
-            return $testPath
-        }
-    }
-    
-    # Fallback to system drive if not found
-    return Join-Path $env:SystemDrive $relativePath
-}
-
 function Convert-WildcardToRegex {
     param([string]$pattern)
     if (-not $pattern) { return ".*" }
@@ -1009,7 +989,7 @@ function Search-GlobalKeyword {
     }
     $regexKeyword = "(" + ($regexPatterns -join '|') + ")"
 
-    Invoke-GlobalHunt -keywords $parsedKeywords -regexPattern $regexKeyword -pathInput $pathInput -directIocs $null
+    Invoke-GlobalHunt -keywords $parsedKeywords -regexPattern $regexKeyword -pathInput $pathInput
 }
 
 function Invoke-GlobalHunt {
@@ -1017,32 +997,10 @@ function Invoke-GlobalHunt {
         [array]$keywords,
         [string]$regexPattern,
         [string]$pathInput,
-        [hashtable]$directIocs
     )
 
     Write-Host "`n[*] Initiating Optimized Global Hunt for: $($keywords -join ', ')..." -ForegroundColor Yellow
     $globalResults = [System.Collections.Generic.List[PSCustomObject]]::new()
-
-    # --- 0. DIRECT ALERT TARGET RESOLUTION ---
-    if ($directIocs -and $directIocs.Path) {
-        if (Test-Path $directIocs.Path) {
-            $fileObj = Get-Item -Path $directIocs.Path
-            $owner = Get-AssociatedUser -path $fileObj.FullName
-            $hashes = Get-FileHashes -filePath $directIocs.Path
-            $globalResults.Add([PSCustomObject]@{
-                Type            = "S1 Alert Target File (Active)"
-                User            = $owner
-                Timestamp       = "Identified in S1 Alert"
-                Name            = $fileObj.Name
-                Value           = $fileObj.FullName
-                SHA1            = $hashes.SHA1
-                SHA256          = $hashes.SHA256
-                RemediationType = "File"
-                RemediationPath = $fileObj.FullName
-            })
-            Write-Host "[+] Resolved active S1 alert target file directly on disk!" -ForegroundColor Green
-        }
-    }
 
     # --- 1. OPTIMIZED REGISTRY HUNT (HKLM, Loaded HKU, and Offline HKU) ---
     Write-Host "[*] Scanning Registry Run Keys..." -ForegroundColor Yellow
@@ -1156,13 +1114,7 @@ function Invoke-GlobalHunt {
         foreach ($ud in $userDirs) { $searchPaths += $ud.FullName }
         $searchPaths += "C:\Users\Public"
         $searchPaths += @("C:\ProgramData", "C:\Windows\Temp", "C:\Temp")
-        
-        if ($directIocs -and $directIocs.Path) {
-            $alertDir = [System.IO.Path]::GetDirectoryName($directIocs.Path)
-            if ($alertDir -and (Test-Path $alertDir) -and ($searchPaths -notcontains $alertDir)) {
-                $searchPaths += $alertDir
-            }
-        }
+
         Write-Host "[*] No path specified. Defaulting to high-value triage areas to prevent system hang." -ForegroundColor DarkGray
     }
 
@@ -1379,359 +1331,6 @@ function Invoke-GlobalHunt {
     } else {
         Write-Host "`n[-] No matches found across any system vectors." -ForegroundColor Red
         Pause
-    }
-}
-
-function Get-S1ThreatHunt {
-    Show-Banner
-    Write-Host "===============================================================" -ForegroundColor DarkCyan
-    Write-Host "  SENTINELONE THREAT DETAIL HUNT" -ForegroundColor Yellow
-    Write-Host "===============================================================" -ForegroundColor DarkCyan
-    Write-Host ""
-    
-    # HIGH-VISIBILITY INSTRUCTION BOX
-    Write-Host "***************************************************************" -ForegroundColor Red
-    Write-Host "  INSTRUCTIONS:" -ForegroundColor Yellow
-    Write-Host "  1. Copy your full SentinelOne Threat Details block." -ForegroundColor White
-    Write-Host "  2. Paste directly into this terminal." -ForegroundColor White
-    Write-Host "  3. Hunt begins automatically after the last line." -ForegroundColor White
-    Write-Host "     (Detection stops at 'Subscription Time:' line)" -ForegroundColor DarkGray
-    Write-Host "  Type Q and press ENTER to cancel." -ForegroundColor DarkGray
-    Write-Host "***************************************************************" -ForegroundColor Red
-    Write-Host ""
-    Write-Host " [+] Paste Threat Details below:" -ForegroundColor Cyan
-    Write-Host ""
-
-    $lines = @()
-    $pasteLoop = $true
-    while ($pasteLoop) {
-        $line = Read-Host
-        if ($line -eq 'Q' -or $line -eq 'q') { return }
-        $lines += $line
-        # Auto-detect end of S1 threat detail block by known terminal fields
-        if ($line -match '(?i)^\s*Subscription\s*Time:' -or
-            $line -match '(?i)^\s*END\s*$') {
-            $pasteLoop = $false
-        }
-    }
-    $rawText = $lines -join "`n"
-
-    if (-not $rawText.Trim()) {
-        Write-Host "[-] No threat details pasted." -ForegroundColor Red
-        Pause
-        return
-    }
-
-    Write-Host "`n[*] Parsing Threat Details..." -ForegroundColor Yellow
-    $iocs = @{}
-    
-    # Extract fields using case-insensitive regex
-    if ($rawText -match '(?i)Name:\s*(.+)')              { $iocs.Name      = $Matches[1].Trim() }
-    if ($rawText -match '(?i)Path:\s*(.+)') { 
-        $rawPath = $Matches[1].Trim()
-        $iocs.Path = Resolve-S1Path -rawPath $rawPath
-    }
-    if ($rawText -match '(?i)SHA1:\s*([a-fA-F0-9]{40})') { $iocs.SHA1      = $Matches[1].Trim() }
-    if ($rawText -match '(?i)SHA256:\s*([a-fA-F0-9]{64})'){ $iocs.SHA256    = $Matches[1].Trim() }
-    if ($rawText -match '(?i)Process User:\s*(.+)')       { $iocs.User      = $Matches[1].Trim() }
-    if ($rawText -match '(?i)Threat Id:\s*(\d+)')         { $iocs.ThreatId  = $Matches[1].Trim() }
-    if ($rawText -match '(?i)Publisher Name:\s*(.+)')     { $iocs.Publisher = $Matches[1].Trim() }
-    if ($rawText -match '(?i)Signer Identity:\s*(.+)')    { $iocs.Signer    = $Matches[1].Trim() }
-    if ($rawText -match '(?i)Originating Process:\s*(.+)'){ $iocs.Origin    = $Matches[1].Trim() }
-    if ($rawText -match '(?i)Computer Name:\s*(.+)')      { $iocs.Computer  = $Matches[1].Trim() }
-    if ($rawText -match '(?i)Logged In User:\s*(.+)')    { $iocs.LoggedInUser = $Matches[1].Trim() }
-    if ($rawText -match '(?i)Storyline:\s*([A-F0-9]+)')   { $iocs.Storyline = $Matches[1].Trim() }
-
-    # Display parsed IOCs
-    Write-Host "`n=== EXTRACTED THREAT IOCS ===" -ForegroundColor Magenta
-    if ($iocs.Name)      { Write-Host "  File Name  : $($iocs.Name)"      -ForegroundColor Cyan }
-    if ($iocs.Path)      { Write-Host "  File Path  : $($iocs.Path)"      -ForegroundColor Cyan }
-    if ($iocs.SHA1)      { Write-Host "  SHA1 Hash  : $($iocs.SHA1)"      -ForegroundColor Cyan }
-    if ($iocs.SHA256)    { Write-Host "  SHA256     : $($iocs.SHA256)"    -ForegroundColor Cyan }
-    if ($iocs.User)      { Write-Host "  User       : $($iocs.User)"      -ForegroundColor Cyan }
-    if ($iocs.Publisher) { Write-Host "  Publisher  : $($iocs.Publisher)" -ForegroundColor Cyan }
-    if ($iocs.Signer)    { Write-Host "  Signer     : $($iocs.Signer)"    -ForegroundColor Cyan }
-    if ($iocs.Origin)    { Write-Host "  Origin Proc: $($iocs.Origin)"    -ForegroundColor Cyan }
-    if ($iocs.Computer)  { Write-Host "  Computer   : $($iocs.Computer)"  -ForegroundColor Cyan }
-    if ($iocs.LoggedInUser) { Write-Host "  Logged User: $($iocs.LoggedInUser)" -ForegroundColor Cyan }
-    if ($iocs.Storyline) { Write-Host "  Storyline  : $($iocs.Storyline)" -ForegroundColor Cyan }
-    if ($iocs.ThreatId)  { Write-Host "  Threat ID  : $($iocs.ThreatId)"  -ForegroundColor Cyan }
-    Write-Host "=============================" -ForegroundColor DarkCyan
-
-    # --- DIRECT TARGET RESOLUTION WITH EXPLICIT USER PROMPT ---
-    $targetDeleted = $false
-    if ($iocs.Path -and (Test-Path $iocs.Path)) {
-        Write-Host "`n===============================================================" -ForegroundColor Red
-        Write-Host "  [!] DIRECT TARGET DETECTED ON DISK" -ForegroundColor Red
-        Write-Host "===============================================================" -ForegroundColor Red
-        Write-Host "  Path: $($iocs.Path)" -ForegroundColor Yellow
-        Write-Host "---------------------------------------------------------------" -ForegroundColor Red
-        
-        $immediateDelete = Read-Host " [?] Do you want to immediately delete this file now? (Y/N)"
-        if ($immediateDelete -eq 'Y' -or $immediateDelete -eq 'y') {
-            try {
-                Remove-Item -Path $iocs.Path -Force -ErrorAction Stop
-                Write-Host "[+] SUCCESS: Deleted target file '$($iocs.Path)'" -ForegroundColor Green
-                $targetDeleted = $true
-            } catch {
-                Write-Host "[-] ERROR: Failed to delete file: $_" -ForegroundColor Red
-            }
-        } else {
-            Write-Host "[*] Skipping immediate deletion. File will be included in the hunt results." -ForegroundColor Yellow
-        }
-        Write-Host "===============================================================" -ForegroundColor Red
-    }
-
-    # Build search keywords
-    $searchKeywords = @()
-    if ($iocs.Name) {
-        # Exact filename
-        $searchKeywords += $iocs.Name
-
-        $baseName = [System.IO.Path]::GetFileNameWithoutExtension($iocs.Name)
-
-        # Always add wildcard of the full base name (e.g. *Shift - PDF_x65q7m*)
-        if ($baseName.Length -gt 3) {
-            $searchKeywords += "*$baseName*"
-        }
-
-        # Broad/generic tokens never useful as standalone search terms
-        # Covers: file types, installer words, platform words, common English components,
-        # browser/app parts, version words, and short ambiguous words
-        $noisyTokens = @(
-            # File extensions / formats
-            'pdf','doc','docx','xls','xlsx','ppt','pptx','exe','msi','zip','rar','7z','iso','img',
-            'dll','sys','bat','cmd','vbs','js','ps1','reg','ini','cfg','xml','json','txt','csv',
-            # Installer / deployment words
-            'setup','install','installer','uninstall','update','updater','upgrade','patch',
-            'deploy','deployer','deployment','launch','launcher','bootstrap',
-            # Platform / architecture
-            'windows','win','win32','win64','x86','x64','32bit','64bit','arm','arm64',
-            # Generic app component words
-            'app','application','apps','tool','tools','utility','utilities','program','programs',
-            'service','services','agent','client','server','host','helper','handler',
-            'manager','monitor','watcher','daemon','worker','broker','proxy',
-            # Browser / web component words
-            'browser','chrome','web','http','https','net','online','cloud',
-            # Common English suffix/prefix components that split out of compound words
-            'next','this','that','plus','lite','pro','max','mini','micro','nano',
-            'new','old','fast','quick','easy','smart','auto','sync','link',
-            'reader','viewer','player','writer','editor','finder','scanner',
-            'open','run','get','set','go','do','use','make','load','save',
-            # Version / release words
-            'free','trial','beta','alpha','demo','full','final','release','build','version','rev',
-            # Noise / temp words
-            'tmp','temp','cache','data','log','logs','output','input','info','test','debug',
-            # Common short English words
-            'the','and','for','with','from','into','onto','upon','over','under','about'
-        )
-
-        # Helper: test a candidate token against all noise/length rules
-        function Test-TokenIsUseful {
-            param([string]$t, [array]$noisy, [array]$existing)
-            if ($t.Length -lt 5)                          { return $false }
-            if ($t -match '^\d+$')                        { return $false }
-            if ($t -match '^[a-fA-F0-9]{6,}$')           { return $false }
-            if ($noisy -contains $t.ToLower())            { return $false }
-            if ($existing -contains $t)                   { return $false }
-            if ($existing -contains "*$t*")               { return $false }
-            return $true
-        }
-
-        # Split on common separators first
-        $separatorTokens = $baseName -split '[\s\-_\.\(\)\[\]]+'
-
-        foreach ($token in $separatorTokens) {
-            $token = $token.Trim()
-            if (-not $token) { continue }
-
-            # CamelCase / PascalCase split  -  e.g. "OneBrowserUpdater" -> "One","Browser","Updater"
-            # Insert a space before each uppercase letter that follows a lowercase letter
-            $camelParts = [regex]::Replace($token, '(?<=[a-z])(?=[A-Z])', ' ') -split ' '
-
-            # Also handle transitions from multiple caps to lowercase: "PDFNext" -> "PDF","Next"
-            $camelParts = $camelParts | ForEach-Object {
-                [regex]::Replace($_, '(?<=[A-Z]{2,})(?=[A-Z][a-z])', ' ') -split ' '
-            }
-
-            # Build candidate substrings: individual camel parts + adjacent pairs + the full token
-            $candidates = @()
-            $camelParts = @($camelParts | Where-Object { $_ })
-            for ($i = 0; $i -lt $camelParts.Count; $i++) {
-                $candidates += $camelParts[$i]
-                # Adjacent pair (e.g. "OneBrowser" from ["One","Browser","Updater"])
-                if ($i -lt $camelParts.Count - 1) {
-                    $candidates += "$($camelParts[$i])$($camelParts[$i+1])"
-                }
-            }
-            # Always include the full unsplit token as a candidate
-            $candidates += $token
-
-            foreach ($c in ($candidates | Select-Object -Unique)) {
-                if (Test-TokenIsUseful -t $c -noisy $noisyTokens -existing $searchKeywords) {
-                    $searchKeywords += $c
-                }
-            }
-        }
-
-        # Strip trailing random suffix (e.g. "Shift - PDF_x65q7m" -> "*Shift - PDF*")
-        # Only add cleaned base if it isn't itself a noisy generic word
-        if ($baseName -match '^(.+?)[_-][a-zA-Z0-9]{4,10}$') {
-            $cleaned = $Matches[1].Trim()
-            $cleanedLower = $cleaned.ToLower() -replace '[\s\-_]',''
-            if ($cleaned.Length -gt 4 -and
-                ($noisyTokens -notcontains $cleanedLower) -and
-                ($searchKeywords -notcontains "*$cleaned*")) {
-                $searchKeywords += "*$cleaned*"
-            }
-        }
-    }
-
-    # Publisher / Signer  -  search for company name tokens (skip all generic business/tech words)
-    $skipWords = @(
-        'inc','ltd','llc','corp','co','the','and','or',
-        'technologies','technology','tech','software','systems','system',
-        'group','solutions','solution','services','global','international',
-        'company','enterprises','engineering','industries','digital','network',
-        'security','consulting','partners','holdings','labs','studio','media'
-    )
-    foreach ($sigField in @($iocs.Publisher, $iocs.Signer)) {
-        if (-not $sigField) { continue }
-        $sigTokens = $sigField -split '[\s,]+' | Where-Object {
-            $_.Length -ge 5 -and
-            ($skipWords -notcontains $_.ToLower()) -and
-            ($noisyTokens -notcontains $_.ToLower()) -and
-            ($searchKeywords -notcontains $_)
-        }
-        foreach ($tok in $sigTokens) {
-            $searchKeywords += $tok
-        }
-    }
-
-    # Originating Process  -  add if not a broad/noisy system process
-    if ($iocs.Origin) {
-        $noisyProcs = @(
-            'chrome.exe','firefox.exe','msedge.exe','iexplore.exe','opera.exe','brave.exe','safari.exe',
-            'powershell.exe','powershell_ise.exe','pwsh.exe',
-            'cmd.exe','conhost.exe','wscript.exe','cscript.exe',
-            'explorer.exe','taskhost.exe','taskhostw.exe','sihost.exe',
-            'svchost.exe','services.exe','lsass.exe','winlogon.exe','csrss.exe','smss.exe','wininit.exe',
-            'msiexec.exe','mshta.exe','rundll32.exe','regsvr32.exe',
-            'outlook.exe','winword.exe','excel.exe','powerpnt.exe','onenote.exe','teams.exe',
-            'slack.exe','zoom.exe','discord.exe',
-            'wmiprvse.exe','wmiapsrv.exe','wsmprovhost.exe',
-            'searchindexer.exe','searchhost.exe','runtimebroker.exe','dllhost.exe'
-        )
-        $originProc = $iocs.Origin.Trim().ToLower()
-        if ($noisyProcs -notcontains $originProc -and $searchKeywords -notcontains $iocs.Origin) {
-            $searchKeywords += $iocs.Origin
-            # Also add the base name without extension as a token
-            $originBase = [System.IO.Path]::GetFileNameWithoutExtension($iocs.Origin)
-            if ($originBase.Length -gt 3 -and $searchKeywords -notcontains $originBase) {
-                $searchKeywords += $originBase
-            }
-        }
-    }
-
-    if ($searchKeywords.Count -eq 0) {
-        Write-Host "[-] Could not extract any actionable IOCs from the pasted text." -ForegroundColor Red
-        Pause
-        return
-    }
-
-    # Compile regex pattern
-    $regexPatterns = @()
-    foreach ($kw in $searchKeywords) {
-        $regexPatterns += Convert-WildcardToRegex -pattern $kw
-    }
-    $regexKeyword = "(" + ($regexPatterns -join '|') + ")"
-
-    # --- HASH VERIFICATION ---
-    # Rather than searching filenames for hash strings (useless), compute the actual
-    # hash of any files found at the known path/name and compare against IOC hashes.
-    if ($iocs.SHA1 -or $iocs.SHA256) {
-        Write-Host ""
-        Write-Host "[*] Running hash verification against known IOC hashes..." -ForegroundColor Yellow
-
-        $hashTargets = @()
-
-        # Check the exact path from the alert
-        if ($iocs.Path -and (Test-Path $iocs.Path)) {
-            $hashTargets += $iocs.Path
-        }
-
-        # Search for any file matching the threat name on disk (common locations)
-        if ($iocs.Name) {
-            $searchRoots = @("$env:USERPROFILE\Downloads","$env:TEMP","C:\Windows\Temp","$env:APPDATA","$env:LOCALAPPDATA","C:\ProgramData")
-            foreach ($root in $searchRoots) {
-                if (-not (Test-Path $root)) { continue }
-                $found = Get-ChildItem -Path $root -Filter $iocs.Name -Recurse -File -Force -ErrorAction SilentlyContinue
-                foreach ($f in $found) {
-                    if ($hashTargets -notcontains $f.FullName) { $hashTargets += $f.FullName }
-                }
-            }
-        }
-
-        if ($hashTargets.Count -eq 0) {
-            Write-Host "  [-] No files found at known paths for hash verification." -ForegroundColor DarkGray
-        } else {
-            foreach ($target in $hashTargets) {
-                Write-Host "  [*] Hashing: $target" -ForegroundColor DarkGray
-                $computed = Get-FileHashes -filePath $target
-                $sha1Match   = $iocs.SHA1   -and ($computed.SHA1   -eq $iocs.SHA1)
-                $sha256Match = $iocs.SHA256 -and ($computed.SHA256 -eq $iocs.SHA256)
-
-                if ($sha1Match -or $sha256Match) {
-                    Write-Host "  [!] HASH MATCH CONFIRMED: $target" -ForegroundColor Red
-                    Write-Host "      Computed SHA1  : $($computed.SHA1)"   -ForegroundColor Red
-                    Write-Host "      Computed SHA256: $($computed.SHA256)" -ForegroundColor Red
-                    Write-Host "      IOC SHA1       : $($iocs.SHA1)"       -ForegroundColor DarkGray
-                    Write-Host "      IOC SHA256     : $($iocs.SHA256)"     -ForegroundColor DarkGray
-                } else {
-                    Write-Host "  [+] No hash match: $target" -ForegroundColor Green
-                    Write-Host "      Computed SHA1  : $($computed.SHA1)"   -ForegroundColor DarkGray
-                    Write-Host "      Computed SHA256: $($computed.SHA256)" -ForegroundColor DarkGray
-                }
-            }
-        }
-        Write-Host ""
-        Pause
-        Write-Host ""
-    }
-
-    # Run the keyword hunt (hashes excluded  -  hash verification handled above)
-    $directIocsToPass = if ($targetDeleted) { $null } else { $iocs }
-    Invoke-GlobalHunt -keywords $searchKeywords -regexPattern $regexKeyword -pathInput $null -directIocs $directIocsToPass
-
-    # --- AUTO EVENT LOG PIVOT ---
-    $pivotKeywords = @()
-    if ($iocs.LoggedInUser) {
-        $plainUser = $iocs.LoggedInUser -replace '^.+\\', ''
-        if ($plainUser.Length -ge 3) { $pivotKeywords += $plainUser }
-    }
-    if ($iocs.Path) {
-        $exeName = [System.IO.Path]::GetFileName($iocs.Path)
-        if ($exeName -and $exeName.Length -ge 3) { $pivotKeywords += $exeName }
-        $baseName = [System.IO.Path]::GetFileNameWithoutExtension($iocs.Path)
-        if ($baseName.Length -ge 3 -and $pivotKeywords -notcontains $baseName) { $pivotKeywords += $baseName }
-    }
-
-    if ($pivotKeywords.Count -gt 0) {
-        Show-Banner
-        Write-Host '===============================================================' -ForegroundColor DarkCyan
-        Write-Host '  AUTO EVENT LOG PIVOT' -ForegroundColor Yellow
-        Write-Host '  Searching event logs (last 3h) for:' -ForegroundColor DarkGray
-        foreach ($kw in $pivotKeywords) { Write-Host "    - $kw" -ForegroundColor Cyan }
-        Write-Host '===============================================================' -ForegroundColor DarkCyan
-        Write-Host ''
-        $pivotConfirm = Read-Host ' [?] Run event log pivot now? (Y/N)'
-        if ($pivotConfirm -eq 'Y' -or $pivotConfirm -eq 'y') {
-            $pivotTime = @{ StartTime = (Get-Date).AddHours(-3); EndTime = Get-Date }
-            $pivotRegexPatterns = @()
-            foreach ($kw in $pivotKeywords) { $pivotRegexPatterns += [regex]::Escape($kw) }
-            $pivotRegex = '(' + ($pivotRegexPatterns -join '|') + ')'
-            Invoke-EventLogSearch -parsedTime $pivotTime -keywords $pivotKeywords -regexPattern $pivotRegex
-        }
     }
 }
 
@@ -3283,30 +2882,28 @@ function Show-Menu {
     Write-Host "       Registry Run Keys, Scheduled Tasks, Startup, Services" -ForegroundColor DarkGray
     Write-Host "  [2]  Global Keyword Hunt" -ForegroundColor White
     Write-Host "       Registry, Tasks, Services, Processes, File System" -ForegroundColor DarkGray
-    Write-Host "  [3]  SentinelOne Threat Detail Hunt" -ForegroundColor White
-    Write-Host "       Paste S1 alert details to hunt IOCs across the endpoint" -ForegroundColor DarkGray
-    Write-Host "  [4]  RMM Software Hunt" -ForegroundColor White
+    Write-Host "  [3]  RMM Software Hunt" -ForegroundColor White
     Write-Host "       Detect AnyDesk, ScreenConnect, TeamViewer, and 20+ RMM tools" -ForegroundColor DarkGray
     Write-Host ""
     Write-Host "  EXECUTION & PROCESS ANALYSIS  |  Execution & Processus" -ForegroundColor Yellow
     Write-Host "  ---------------------------------------------------------------" -ForegroundColor DarkGray
-    Write-Host "  [5]  PowerShell Execution History" -ForegroundColor White
+    Write-Host "  [4]  PowerShell Execution History" -ForegroundColor White
     Write-Host "       Event Log (ID 4104) with timeframe filter" -ForegroundColor DarkGray
-    Write-Host "  [6]  Broad Event Log Search" -ForegroundColor White
+    Write-Host "  [5]  Broad Event Log Search" -ForegroundColor White
     Write-Host "       Search Security, System, RDP, Tasks, PowerShell logs by keyword" -ForegroundColor DarkGray
     Write-Host ""
     Write-Host "  CLICKFIX / DRIVE-BY TRIAGE" -ForegroundColor Yellow
     Write-Host "  ---------------------------------------------------------------" -ForegroundColor DarkGray
-    Write-Host "  [7]  Recently Written Files Hunt" -ForegroundColor White
+    Write-Host "  [6]  Recently Written Files Hunt" -ForegroundColor White
     Write-Host "       Detect files dropped during ClickFix or drive-by attacks" -ForegroundColor DarkGray
-    Write-Host "  [8]  RunMRU Execution Hunt" -ForegroundColor White
+    Write-Host "  [7]  RunMRU Execution Hunt" -ForegroundColor White
     Write-Host "       Run dialog history across all user profiles" -ForegroundColor DarkGray
     Write-Host ""
     Write-Host "  FORENSICS  |  Investigation Numerique" -ForegroundColor Yellow
     Write-Host "  ---------------------------------------------------------------" -ForegroundColor DarkGray
-    Write-Host "  [9]  DFIR System Info" -ForegroundColor White
+    Write-Host "  [8]  DFIR System Info" -ForegroundColor White
     Write-Host "       OS baseline, network config, local admins, AV posture" -ForegroundColor DarkGray
-    Write-Host "  [10] Browser Forensics" -ForegroundColor White
+    Write-Host "  [9]  Browser Forensics" -ForegroundColor White
     Write-Host "       Extensions & notification perms across Chrome, Edge, Brave, Firefox" -ForegroundColor DarkGray
     Write-Host ""
     Write-Host "  ---------------------------------------------------------------" -ForegroundColor DarkGray
@@ -3324,14 +2921,13 @@ function Show-Menu {
         }
     }
     elseif ($choice -eq '2') { Search-GlobalKeyword }
-    elseif ($choice -eq '3') { Get-S1ThreatHunt }
-    elseif ($choice -eq '4') { Get-RMMHunt }
-    elseif ($choice -eq '5') { Get-PSHistory }
-    elseif ($choice -eq '6') { Get-EventLogSearch }
-    elseif ($choice -eq '7') { Get-RecentlyWrittenFiles }
-    elseif ($choice -eq '8') { Get-RunMRU }
-    elseif ($choice -eq '9') { Get-SystemInfo }
-    elseif ($choice -eq '10') { Get-BrowserForensics }
+    elseif ($choice -eq '3') { Get-RMMHunt }
+    elseif ($choice -eq '4') { Get-PSHistory }
+    elseif ($choice -eq '5') { Get-EventLogSearch }
+    elseif ($choice -eq '6') { Get-RecentlyWrittenFiles }
+    elseif ($choice -eq '7') { Get-RunMRU }
+    elseif ($choice -eq '8') { Get-SystemInfo }
+    elseif ($choice -eq '9') { Get-BrowserForensics }
     elseif ($choice -eq 'Q' -or $choice -eq 'q') { return $true }
     elseif ($choice -eq 'D' -or $choice -eq 'd') { return 'destruct' }
     else {
