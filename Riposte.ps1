@@ -2862,9 +2862,20 @@ function Get-SystemInfo {
     $sysChoice = Read-Host " [?] Select an option"
     if ($sysChoice -eq 'C') {
         Write-Host "`n=== ACTIVE NETWORK CONNECTIONS ===" -ForegroundColor Magenta
-        Get-NetTCPConnection | Where-Object State -in @('Established', 'Listen') | 
-            Select-Object State, LocalAddress, LocalPort, RemoteAddress, RemotePort, OwningProcess |
-            Format-Table -AutoSize | Out-String | Write-Host
+        $procMap = @{}
+        Get-Process | ForEach-Object { $procMap[$_.Id] = $_.Name }
+        Get-NetTCPConnection | Where-Object State -in @('Established', 'Listen') |
+            ForEach-Object {
+                $procName = if ($procMap.ContainsKey($_.OwningProcess)) { $procMap[$_.OwningProcess] } else { "PID $($_.OwningProcess)" }
+                [PSCustomObject]@{
+                    State         = $_.State
+                    LocalAddress  = "$($_.LocalAddress):$($_.LocalPort)"
+                    RemoteAddress = "$($_.RemoteAddress):$($_.RemotePort)"
+                    PID           = $_.OwningProcess
+                    Process       = $procName
+                }
+            } | Sort-Object State, Process |
+            Format-Table State, LocalAddress, RemoteAddress, PID, Process -AutoSize | Out-String | Write-Host
         Pause
     } elseif ($sysChoice -eq 'D') {
         Write-Host "`n=== DNS RESOLVER CACHE ===" -ForegroundColor Magenta
