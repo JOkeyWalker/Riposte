@@ -996,7 +996,7 @@ function Invoke-GlobalHunt {
     param(
         [array]$keywords,
         [string]$regexPattern,
-        [string]$pathInput,
+        [string]$pathInput
     )
 
     Write-Host "`n[*] Initiating Optimized Global Hunt for: $($keywords -join ', ')..." -ForegroundColor Yellow
