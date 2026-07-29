@@ -17,7 +17,6 @@ Riposte is a self-contained PowerShell script built for SOC analysts who need to
 ### Threat Hunting
 - **Persistence Hunt** — Registry run keys, scheduled tasks, startup folders, and services
 - **Global Keyword Hunt** — Cross-system search across registry, tasks, services, file system, running processes, and event logs with progress indicators
-- **SentinelOne Threat Detail Hunt** — Paste an S1 alert's threat details directly to auto-extract IOCs (filename, hashes, publisher, signer, originating process, logged-in user) for a full endpoint hunt, hash verification, and automatic event log pivot
 - **RMM Software Hunt** — Detects 25+ known remote monitoring and management tools (AnyDesk, ScreenConnect, TeamViewer, etc.) with install dates across processes, services, registry, and disk
 
 ### Execution & Process Analysis
