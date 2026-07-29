@@ -1439,6 +1439,7 @@ function Get-S1ThreatHunt {
     if ($rawText -match '(?i)Signer Identity:\s*(.+)')    { $iocs.Signer    = $Matches[1].Trim() }
     if ($rawText -match '(?i)Originating Process:\s*(.+)'){ $iocs.Origin    = $Matches[1].Trim() }
     if ($rawText -match '(?i)Computer Name:\s*(.+)')      { $iocs.Computer  = $Matches[1].Trim() }
+    if ($rawText -match '(?i)Logged In User:\s*(.+)')    { $iocs.LoggedInUser = $Matches[1].Trim() }
     if ($rawText -match '(?i)Storyline:\s*([A-F0-9]+)')   { $iocs.Storyline = $Matches[1].Trim() }
 
     # Display parsed IOCs
@@ -1452,6 +1453,7 @@ function Get-S1ThreatHunt {
     if ($iocs.Signer)    { Write-Host "  Signer     : $($iocs.Signer)"    -ForegroundColor Cyan }
     if ($iocs.Origin)    { Write-Host "  Origin Proc: $($iocs.Origin)"    -ForegroundColor Cyan }
     if ($iocs.Computer)  { Write-Host "  Computer   : $($iocs.Computer)"  -ForegroundColor Cyan }
+    if ($iocs.LoggedInUser) { Write-Host "  Logged User: $($iocs.LoggedInUser)" -ForegroundColor Cyan }
     if ($iocs.Storyline) { Write-Host "  Storyline  : $($iocs.Storyline)" -ForegroundColor Cyan }
     if ($iocs.ThreatId)  { Write-Host "  Threat ID  : $($iocs.ThreatId)"  -ForegroundColor Cyan }
     Write-Host "=============================" -ForegroundColor DarkCyan
@@ -1700,6 +1702,37 @@ function Get-S1ThreatHunt {
     # Run the keyword hunt (hashes excluded  -  hash verification handled above)
     $directIocsToPass = if ($targetDeleted) { $null } else { $iocs }
     Invoke-GlobalHunt -keywords $searchKeywords -regexPattern $regexKeyword -pathInput $null -directIocs $directIocsToPass
+
+    # --- AUTO EVENT LOG PIVOT ---
+    $pivotKeywords = @()
+    if ($iocs.LoggedInUser) {
+        $plainUser = $iocs.LoggedInUser -replace '^.+\\', ''
+        if ($plainUser.Length -ge 3) { $pivotKeywords += $plainUser }
+    }
+    if ($iocs.Path) {
+        $exeName = [System.IO.Path]::GetFileName($iocs.Path)
+        if ($exeName -and $exeName.Length -ge 3) { $pivotKeywords += $exeName }
+        $baseName = [System.IO.Path]::GetFileNameWithoutExtension($iocs.Path)
+        if ($baseName.Length -ge 3 -and $pivotKeywords -notcontains $baseName) { $pivotKeywords += $baseName }
+    }
+
+    if ($pivotKeywords.Count -gt 0) {
+        Show-Banner
+        Write-Host '===============================================================' -ForegroundColor DarkCyan
+        Write-Host '  AUTO EVENT LOG PIVOT' -ForegroundColor Yellow
+        Write-Host '  Searching event logs (last 3h) for:' -ForegroundColor DarkGray
+        foreach ($kw in $pivotKeywords) { Write-Host "    - $kw" -ForegroundColor Cyan }
+        Write-Host '===============================================================' -ForegroundColor DarkCyan
+        Write-Host ''
+        $pivotConfirm = Read-Host ' [?] Run event log pivot now? (Y/N)'
+        if ($pivotConfirm -eq 'Y' -or $pivotConfirm -eq 'y') {
+            $pivotTime = @{ StartTime = (Get-Date).AddHours(-3); EndTime = Get-Date }
+            $pivotRegexPatterns = @()
+            foreach ($kw in $pivotKeywords) { $pivotRegexPatterns += [regex]::Escape($kw) }
+            $pivotRegex = '(' + ($pivotRegexPatterns -join '|') + ')'
+            Invoke-EventLogSearch -parsedTime $pivotTime -keywords $pivotKeywords -regexPattern $pivotRegex
+        }
+    }
 }
 
 function Get-PSHistory {
@@ -1870,6 +1903,245 @@ function Get-PSHistory {
         }
     }
 }
+
+function Invoke-EventLogSearch {
+    param(
+        [hashtable]$parsedTime,
+        [array]$keywords,
+        [string]$regexPattern
+    )
+    $huntStartTime = Get-Date
+
+    # Event log targets with friendly descriptions
+    $eventLogTargets = @(
+        @{ Log = "Security"; IDs = @(4624, 4625, 4634, 4647, 4648, 4672, 4673, 4688, 4698, 4702, 4720, 4722, 4724, 4726, 4732, 4740, 4756) },
+        @{ Log = "System";   IDs = @(7045, 7036, 7040, 104) },
+        @{ Log = "Application"; IDs = @() },
+        @{ Log = "Microsoft-Windows-TerminalServices-LocalSessionManager/Operational"; IDs = @(21, 23, 24, 25) },
+        @{ Log = "Microsoft-Windows-TaskScheduler/Operational"; IDs = @(106, 140, 141, 200, 201) },
+        @{ Log = "Microsoft-Windows-PowerShell/Operational"; IDs = @(4104) },
+        @{ Log = "Microsoft-Windows-Sysmon/Operational"; IDs = @(1, 3, 7, 11, 12, 13) }
+    )
+
+    $eventDesc = @{
+        4624 = "Logon Success";          4625 = "Logon Failure";           4634 = "Logoff"
+        4647 = "User Initiated Logoff";  4648 = "Explicit Logon";          4672 = "Privileged Logon"
+        4673 = "Privileged Service";     4688 = "Process Created";         4698 = "Scheduled Task Created"
+        4702 = "Scheduled Task Updated"; 4720 = "Account Created";         4722 = "Account Enabled"
+        4724 = "Password Reset";         4726 = "Account Deleted";         4732 = "Added to Group"
+        4740 = "Account Locked Out";     4756 = "Added to Global Group"
+        7045 = "New Service Installed";  7036 = "Service State Change";    7040 = "Service Start Type Changed"
+        104  = "Event Log Cleared"
+        21   = "RDP Session Logon";      23   = "RDP Session Logoff";      24   = "RDP Session Disconnect"
+        25   = "RDP Session Reconnect"
+        106  = "Task Registered";        140  = "Task Not Started";        141  = "Task Removed"
+        200  = "Task Action Started";    201  = "Task Action Completed"
+        4104 = "PS Script Block"
+        1    = "Sysmon Process Create";  3    = "Sysmon Network Connect";  7    = "Sysmon Image Load"
+        11   = "Sysmon File Created";    12   = "Sysmon Registry Create";  13   = "Sysmon Registry Set"
+    }
+
+    foreach ($target in $eventLogTargets) {
+        $logName = $target.Log
+        $logExists = Get-WinEvent -ListLog $logName -ErrorAction SilentlyContinue
+        if (-not $logExists) { continue }
+
+        $shortLog = $logName -replace 'Microsoft-Windows-','' -replace '/Operational','' -replace '/Admin',''
+        Write-Host "[*] Scanning $shortLog..." -ForegroundColor DarkGray
+
+        try {
+            $filter = @{ LogName = $logName; StartTime = $parsedTime.StartTime; EndTime = $parsedTime.EndTime }
+            if ($target.IDs.Count -gt 0) { $filter['Id'] = $target.IDs }
+
+            $events = Get-WinEvent -FilterHashtable $filter -MaxEvents 10000 -ErrorAction Stop
+
+            foreach ($evt in $events) {
+                if ($evt.TimeCreated -ge $huntStartTime) { continue }
+
+                $msg = try { $evt.Message } catch { "" }
+                if (-not $msg) { $msg = ($evt.Properties | ForEach-Object { $_.Value }) -join " " }
+                if (-not ($msg -match $regexPattern)) { continue }
+
+                # Resolve user
+                $evtUser = "N/A"
+                if ($evt.UserId) {
+                    $evtUser = Resolve-SidToUsername -sid $evt.UserId.ToString()
+                } elseif ($msg -match '(?i)Account Name:\s+(\S+)') {
+                    $evtUser = $Matches[1]
+                } elseif ($msg -match '(?i)User Name:\s+(\S+)') {
+                    $evtUser = $Matches[1]
+                }
+                if ($evtUser -match "(?i)SentinelRSHUser|SentinelOne") { continue }
+
+                $friendlyDesc = if ($eventDesc.ContainsKey($evt.Id)) { $eventDesc[$evt.Id] } else { "Event ID $($evt.Id)" }
+
+                # Extract structured detail based on event ID
+                $detail = switch ($evt.Id) {
+
+                    # Logon success
+                    4624 {
+                        $logonType = if ($msg -match 'Logon Type:\s+(\d+)') { $Matches[1] } else { "?" }
+                        $logonTypes = @{'2'='Interactive';'3'='Network';'4'='Batch';'5'='Service';'7'='Unlock';'8'='NetworkCleartext';'10'='RemoteInteractive';'11'='CachedInteractive'}
+                        $logonTypeName = if ($logonTypes.ContainsKey($logonType)) { $logonTypes[$logonType] } else { "Type $logonType" }
+                        $srcIP = if ($msg -match 'Source Network Address:\s+(\S+)') { $Matches[1] } else { "-" }
+                        $srcHost = if ($msg -match 'Workstation Name:\s+(\S+)') { $Matches[1] } else { "-" }
+                        $acct = if ($msg -match 'Account Name:\s+(\S+)') { $Matches[1] } else { "-" }
+                        "Logon: $logonTypeName | Account: $acct | Source IP: $srcIP | Source Host: $srcHost"
+                    }
+
+                    # Logon failure
+                    4625 {
+                        $reason = if ($msg -match 'Failure Reason:\s+(.+)') { $Matches[1].Trim() } else { "?" }
+                        $srcIP = if ($msg -match 'Source Network Address:\s+(\S+)') { $Matches[1] } else { "-" }
+                        $acct = if ($msg -match 'Account Name:\s+(\S+)') { $Matches[1] } else { "-" }
+                        "Failed Account: $acct | Reason: $reason | Source IP: $srcIP"
+                    }
+
+                    # Account locked out
+                    4740 {
+                        $acct = if ($msg -match 'Account Name:\s+(\S+)') { $Matches[1] } else { "-" }
+                        $caller = if ($msg -match 'Caller Computer Name:\s+(\S+)') { $Matches[1] } else { "-" }
+                        "Locked Account: $acct | From: $caller"
+                    }
+
+                    # Explicit logon / RDP
+                    { $_ -in @(4648, 21, 23, 24, 25) } {
+                        $acct = if ($msg -match 'Account Name:\s+(\S+)') { $Matches[1] } else { "-" }
+                        $srcIP = if ($msg -match 'Source Network Address:\s+(\S+)') { $Matches[1] } else { "-" }
+                        $session = if ($msg -match 'Session ID:\s+(\S+)') { $Matches[1] } else { "-" }
+                        "Account: $acct | Source IP: $srcIP | Session: $session"
+                    }
+
+                    # Process created
+                    4688 {
+                        $proc = if ($msg -match 'New Process Name:\s+(.+)') { $Matches[1].Trim() } else { "-" }
+                        $cmdline = if ($msg -match 'Process Command Line:\s+(.+)') { $Matches[1].Trim() } else { "-" }
+                        $parentFull = if ($msg -match 'Creator Process Name:\s+(.+)') { $Matches[1].Trim() } else { "-" }
+                        if ($cmdline.Length -gt 200) {
+                            $cut = $cmdline.Substring(0, 200)
+                            $lastSpace = $cut.LastIndexOf(' ')
+                            $cmdline = $(if ($lastSpace -gt 100) { $cut.Substring(0, $lastSpace) } else { $cut }) + "..."
+                        }
+                        $parentName = if ($parentFull -ne "-") { [System.IO.Path]::GetFileName($parentFull) } else { "-" }
+                        "Process: $proc | CommandLine: $cmdline | Parent: $parentName"
+                    }
+
+                    # New service installed
+                    7045 {
+                        $svcName = if ($msg -match 'Service Name:\s+(.+)') { $Matches[1].Trim() } else { "-" }
+                        $svcFile = if ($msg -match 'Service File Name:\s+(.+)') { $Matches[1].Trim() } else { "-" }
+                        $svcType = if ($msg -match 'Service Type:\s+(.+)') { $Matches[1].Trim() } else { "-" }
+                        $svcAcct = if ($msg -match 'Service Account:\s+(.+)') { $Matches[1].Trim() } else { "-" }
+                        "Service: $svcName | Path: $svcFile | Type: $svcType | Account: $svcAcct"
+                    }
+
+                    # Service state change
+                    7036 {
+                        $svcName = if ($msg -match "'(.+)'") { $Matches[1] } else { "-" }
+                        $state = if ($msg -match 'entered the (\S+) state') { $Matches[1] } else { "-" }
+                        "Service: $svcName | New State: $state"
+                    }
+
+                    # Scheduled task created/updated
+                    { $_ -in @(4698, 4702, 106, 141, 200, 201) } {
+                        $taskName = if ($msg -match 'Task Name:\s+(.+)') { $Matches[1].Trim() } else { "-" }
+                        $acct = if ($msg -match 'Subject:\s*\r?\n\s+Account Name:\s+(\S+)') { $Matches[1] } else { "-" }
+                        "Task: $taskName | Account: $acct"
+                    }
+
+                    # Account created/deleted/modified
+                    { $_ -in @(4720, 4722, 4724, 4726, 4732, 4756) } {
+                        $targetAcct = if ($msg -match 'Target Account.*?Account Name:\s+(\S+)') { $Matches[1] } elseif ($msg -match 'Account Name:\s+(\S+)') { $Matches[1] } else { "-" }
+                        $callerAcct = if ($msg -match 'Subject.*?Account Name:\s+(\S+)') { $Matches[1] } else { "-" }
+                        "Target Account: $targetAcct | Performed By: $callerAcct"
+                    }
+
+                    # PowerShell script block
+                    4104 {
+                        $scriptText = if ($msg -match 'ScriptBlock Text:\s*\r?\n(.+?)(?:\r?\n|$)') { $Matches[1].Trim() } else {
+                            ($msg -split "`n" | Where-Object { $_ -match $regexPattern } | Select-Object -First 1).Trim()
+                        }
+                        if ($scriptText.Length -gt 200) { $scriptText = $scriptText.Substring(0, 200) + "..." }
+                        "Script: $scriptText"
+                    }
+
+                    # Sysmon process create
+                    1 {
+                        $image = if ($msg -match 'Image:\s+(.+)') { $Matches[1].Trim() } else { "-" }
+                        $cmdline = if ($msg -match 'CommandLine:\s+(.+)') { $Matches[1].Trim() } else { "-" }
+                        $parentFull = if ($msg -match 'ParentImage:\s+(.+)') { $Matches[1].Trim() } else { "-" }
+                        # Trim CommandLine at 200 chars on a word boundary
+                        if ($cmdline.Length -gt 200) {
+                            $cut = $cmdline.Substring(0, 200)
+                            $lastSpace = $cut.LastIndexOf(' ')
+                            $cmdline = $(if ($lastSpace -gt 100) { $cut.Substring(0, $lastSpace) } else { $cut }) + "..."
+                        }
+                        # Show only filename for parent to keep it readable
+                        $parentName = if ($parentFull -ne "-") { [System.IO.Path]::GetFileName($parentFull) } else { "-" }
+                        "Image: $image | CommandLine: $cmdline | Parent: $parentName"
+                    }
+
+                    # Sysmon network connect
+                    3 {
+                        $image = if ($msg -match 'Image:\s+(.+)') { $Matches[1].Trim() } else { "-" }
+                        $destIP = if ($msg -match 'DestinationIp:\s+(\S+)') { $Matches[1] } else { "-" }
+                        $destPort = if ($msg -match 'DestinationPort:\s+(\S+)') { $Matches[1] } else { "-" }
+                        $destHost = if ($msg -match 'DestinationHostname:\s+(\S+)') { $Matches[1] } else { "-" }
+                        "Process: $image | Dest: $destHost ($destIP`:$destPort)"
+                    }
+
+                    # Sysmon file created
+                    11 {
+                        $image = if ($msg -match 'Image:\s+(.+)') { $Matches[1].Trim() } else { "-" }
+                        $target = if ($msg -match 'TargetFilename:\s+(.+)') { $Matches[1].Trim() } else { "-" }
+                        "Process: $image | File Created: $target"
+                    }
+
+                    # Sysmon registry
+                    { $_ -in @(12, 13) } {
+                        $image = if ($msg -match 'Image:\s+(.+)') { $Matches[1].Trim() } else { "-" }
+                        $target = if ($msg -match 'TargetObject:\s+(.+)') { $Matches[1].Trim() } else { "-" }
+                        $details = if ($msg -match 'Details:\s+(.+)') { $Matches[1].Trim() } else { "" }
+                        "Process: $image | Key: $target$(if ($details) { " | Value: $details" })"
+                    }
+
+                    # Event log cleared
+                    104 {
+                        $channel = if ($msg -match 'Log Name:\s+(.+)') { $Matches[1].Trim() } else { "-" }
+                        $acct = if ($msg -match 'Subject:\s*\r?\n\s+Account Name:\s+(\S+)') { $Matches[1] } else { "-" }
+                        "Log Cleared: $channel | By: $acct"
+                    }
+
+                    # Default - pull the matching keyword line
+                    default {
+                        $matchLine = ($msg -split "`n" | Where-Object { $_ -match $regexPattern } | Select-Object -First 1)
+                        if ($matchLine) { $matchLine.Trim() } else { $msg.Substring(0, [Math]::Min(250, $msg.Length)).Trim() }
+                    }
+                }
+
+                $results += [PSCustomObject]@{
+                    Type            = "Event: $shortLog"
+                    User            = $evtUser
+                    Timestamp       = $evt.TimeCreated.ToString("yyyy-MM-dd HH:mm:ss")
+                    Name            = "$friendlyDesc (ID $($evt.Id))"
+                    Value           = $detail
+                    SHA1            = "N/A"
+                    SHA256          = "N/A"
+                    RemediationType = "None"
+                    RemediationPath = "N/A"
+                }
+            }
+        } catch { }
+    }
+
+    if ($results.Count -gt 0) {
+        Process-RemediationLoop -items $results -title "EVENT LOG SEARCH: $($keywords -join ', ')"
+    } else {
+        Write-Host "`n[-] No matching events found in the selected timeframe." -ForegroundColor Red
+        Pause
+    }
+}
+
 
 function Get-EventLogSearch {
     Show-Banner
