@@ -1421,14 +1421,6 @@ function Get-PSHistory {
         Write-Host "    [+] Module Logging (4103): $($evts.Count) events" -ForegroundColor DarkGray
     } catch {}
 
-    # Source 3: Classic Windows PowerShell log - session starts/stops, works without script block logging
-    try {
-        $filter = @{ LogName = 'Windows PowerShell'; ID = @(400, 403, 800); StartTime = $startTime; EndTime = $endTime }
-        $evts = Get-WinEvent -FilterHashtable $filter -MaxEvents 500 -ErrorAction Stop
-        foreach ($e in $evts) { $allEvents.Add($e) }
-        Write-Host "    [+] Classic PS Log (400/403/800): $($evts.Count) events" -ForegroundColor DarkGray
-    } catch {}
-
     # Sort all events by time descending
     $events = if ($allEvents.Count -gt 0) { $allEvents | Sort-Object TimeCreated -Descending } else { $null }
     
@@ -1476,14 +1468,6 @@ function Get-PSHistory {
                     $cmdLine = if ($msg -match 'CommandName=(.+?)[\r\n]') { $Matches[1].Trim() } else { "" }
                     $params  = if ($msg -match 'CommandLine=(.+?)[\r\n]') { $Matches[1].Trim() } else { "" }
                     $scriptBlock = if ($params) { "$cmdLine $params" } else { $cmdLine }
-                }
-                { $_ -in @(400, 403, 800) } {
-                    # Classic log - host application and command details
-                    $msg = try { $event.Message } catch { "" }
-                    $hostApp = if ($msg -match 'HostApplication=(.+?)[\r\n]') { $Matches[1].Trim() } else { "" }
-                    $cmdLine = if ($msg -match 'CommandLine=(.+?)[\r\n]') { $Matches[1].Trim() } else { "" }
-                    $evtType = switch ($event.Id) { 400 { "PS Session Started" } 403 { "PS Session Ended" } 800 { "PS Pipeline" } }
-                    $scriptBlock = "$evtType | $hostApp$(if ($cmdLine) { " | $cmdLine" })"
                 }
                 default { $scriptBlock = try { $event.Properties[2].Value } catch { $event.Message } }
             }
@@ -1644,6 +1628,7 @@ function Invoke-EventLogSearch {
         @{ Log = "Microsoft-Windows-TerminalServices-LocalSessionManager/Operational"; IDs = @(21, 23, 24, 25) },
         @{ Log = "Microsoft-Windows-TaskScheduler/Operational"; IDs = @(106, 140, 141, 200, 201) },
         @{ Log = "Microsoft-Windows-PowerShell/Operational"; IDs = @(4104) },
+        @{ Log = "Microsoft-Windows-WinRM/Operational"; IDs = @(91, 142, 168, 169) },
         @{ Log = "Microsoft-Windows-Sysmon/Operational"; IDs = @(1, 3, 7, 11, 12, 13) }
     )
 
@@ -1661,6 +1646,8 @@ function Invoke-EventLogSearch {
         106  = "Task Registered";        140  = "Task Not Started";        141  = "Task Removed"
         200  = "Task Action Started";    201  = "Task Action Completed"
         4104 = "PS Script Block"
+        91   = "WinRM Session Created";  142  = "WinRM Connect Failed";    168  = "WinRM Auth Attempt"
+        169  = "WinRM Auth Success"
         1    = "Sysmon Process Create";  3    = "Sysmon Network Connect";  7    = "Sysmon Image Load"
         11   = "Sysmon File Created";    12   = "Sysmon Registry Create";  13   = "Sysmon Registry Set"
     }
@@ -1838,6 +1825,15 @@ function Invoke-EventLogSearch {
                     }
 
                     # Default - pull the matching keyword line
+
+                    # WinRM remote session events
+                    { $_ -in @(91, 142, 168, 169) } {
+                        $msg2 = try { $evt.Message } catch { "" }
+                        $srcIP   = if ($msg2 -match 'connection.*?(\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3})|client.*?(\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3})') { $Matches[1] + $Matches[2] } else { "-" }
+                        $account = if ($msg2 -match 'User:\s+(\S+)|account.*?:\s+(\S+)') { $Matches[1] + $Matches[2] } else { "-" }
+                        $scheme  = if ($msg2 -match 'auth.*?scheme[^:]*:\s*(\S+)|Authentication Scheme:\s*(\S+)') { $Matches[1] + $Matches[2] } else { "-" }
+                        "Source IP: $srcIP | Account: $account | Auth: $scheme"
+                    }
                     default {
                         $matchLine = ($msg -split "`n" | Where-Object { $_ -match $regexPattern } | Select-Object -First 1)
                         if ($matchLine) { $matchLine.Trim() } else { $msg.Substring(0, [Math]::Min(250, $msg.Length)).Trim() }
@@ -1919,6 +1915,7 @@ function Get-EventLogSearch {
         @{ Log = "Microsoft-Windows-TerminalServices-LocalSessionManager/Operational"; IDs = @(21, 23, 24, 25) },
         @{ Log = "Microsoft-Windows-TaskScheduler/Operational"; IDs = @(106, 140, 141, 200, 201) },
         @{ Log = "Microsoft-Windows-PowerShell/Operational"; IDs = @(4104) },
+        @{ Log = "Microsoft-Windows-WinRM/Operational"; IDs = @(91, 142, 168, 169) },
         @{ Log = "Microsoft-Windows-Sysmon/Operational"; IDs = @(1, 3, 7, 11, 12, 13) }
     )
 
@@ -1936,6 +1933,8 @@ function Get-EventLogSearch {
         106  = "Task Registered";        140  = "Task Not Started";        141  = "Task Removed"
         200  = "Task Action Started";    201  = "Task Action Completed"
         4104 = "PS Script Block"
+        91   = "WinRM Session Created";  142  = "WinRM Connect Failed";    168  = "WinRM Auth Attempt"
+        169  = "WinRM Auth Success"
         1    = "Sysmon Process Create";  3    = "Sysmon Network Connect";  7    = "Sysmon Image Load"
         11   = "Sysmon File Created";    12   = "Sysmon Registry Create";  13   = "Sysmon Registry Set"
     }
@@ -2113,6 +2112,15 @@ function Get-EventLogSearch {
                     }
 
                     # Default - pull the matching keyword line
+
+                    # WinRM remote session events
+                    { $_ -in @(91, 142, 168, 169) } {
+                        $msg2 = try { $evt.Message } catch { "" }
+                        $srcIP   = if ($msg2 -match 'connection.*?(\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3})|client.*?(\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3})') { $Matches[1] + $Matches[2] } else { "-" }
+                        $account = if ($msg2 -match 'User:\s+(\S+)|account.*?:\s+(\S+)') { $Matches[1] + $Matches[2] } else { "-" }
+                        $scheme  = if ($msg2 -match 'auth.*?scheme[^:]*:\s*(\S+)|Authentication Scheme:\s*(\S+)') { $Matches[1] + $Matches[2] } else { "-" }
+                        "Source IP: $srcIP | Account: $account | Auth: $scheme"
+                    }
                     default {
                         $matchLine = ($msg -split "`n" | Where-Object { $_ -match $regexPattern } | Select-Object -First 1)
                         if ($matchLine) { $matchLine.Trim() } else { $msg.Substring(0, [Math]::Min(250, $msg.Length)).Trim() }
