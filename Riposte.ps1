@@ -1384,6 +1384,21 @@ function Get-PSHistory {
     $startTime = $parsedTime.StartTime
     $endTime = $parsedTime.EndTime
 
+    # Build a local SID->username cache from ProfileList registry
+    # This resolves domain SIDs even when the DC is unreachable (S1 RTR limitation)
+    $sidCache = @{}
+    try {
+        $profileList = "HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\ProfileList"
+        Get-ChildItem $profileList -ErrorAction SilentlyContinue | ForEach-Object {
+            $profileSid = $_.PSChildName
+            $profilePath = (Get-ItemProperty $_.PSPath -Name ProfileImagePath -ErrorAction SilentlyContinue).ProfileImagePath
+            if ($profilePath) {
+                $username = Split-Path $profilePath -Leaf
+                $sidCache[$profileSid] = $username
+            }
+        }
+    } catch {}
+
     Write-Host "`n[*] Querying PowerShell Operational Event Log (ID 4104)..." -ForegroundColor Yellow
     Write-Host "    Range: $($startTime.ToString('yyyy-MM-dd HH:mm:ss')) to $($endTime.ToString('yyyy-MM-dd HH:mm:ss'))" -ForegroundColor DarkGray
     
@@ -1406,7 +1421,14 @@ function Get-PSHistory {
         foreach ($event in $events) {
             # Extract SID string from the SecurityIdentifier object before resolving
             $sidString = if ($event.UserId) { $event.UserId.ToString() } else { $null }
-            $resolvedUser = if ($sidString) { Resolve-SidToUsername -sid $sidString } else { "Unknown" }
+            # Check local ProfileList cache first (works offline, no DC needed)
+            $resolvedUser = if ($sidString -and $sidCache.ContainsKey($sidString)) {
+                $sidCache[$sidString]
+            } elseif ($sidString) {
+                Resolve-SidToUsername -sid $sidString
+            } else {
+                "Unknown"
+            }
             
             # Skip SentinelOne remote shell operator activity
             if ($resolvedUser -match "(?i)SentinelRSHUser|SentinelOne") { continue }
