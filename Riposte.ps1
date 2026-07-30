@@ -1399,21 +1399,48 @@ function Get-PSHistory {
         }
     } catch {}
 
-    Write-Host "`n[*] Querying PowerShell Operational Event Log (ID 4104)..." -ForegroundColor Yellow
+    Write-Host "`n[*] Querying PowerShell Event Logs..." -ForegroundColor Yellow
     Write-Host "    Range: $($startTime.ToString('yyyy-MM-dd HH:mm:ss')) to $($endTime.ToString('yyyy-MM-dd HH:mm:ss'))" -ForegroundColor DarkGray
     
-    $filter = @{
-        LogName = 'Microsoft-Windows-PowerShell/Operational'
-        ID = 4104
-        StartTime = $startTime
-        EndTime = $endTime
-    }
-
-    # Query with a safety cap of 1000 events to prevent terminal spam/hangs
     $events = $null
+    $allEvents = [System.Collections.Generic.List[object]]::new()
+
+    # Source 1: Script Block Logging (ID 4104) - full script content
     try {
-        $events = Get-WinEvent -FilterHashtable $filter -MaxEvents 1000 -ErrorAction Stop
+        $filter = @{ LogName = 'Microsoft-Windows-PowerShell/Operational'; ID = 4104; StartTime = $startTime; EndTime = $endTime }
+        $evts = Get-WinEvent -FilterHashtable $filter -MaxEvents 1000 -ErrorAction Stop
+        foreach ($e in $evts) { $allEvents.Add($e) }
+        Write-Host "    [+] Script Block Logging (4104): $($evts.Count) events" -ForegroundColor DarkGray
     } catch {}
+
+    # Source 2: Module Logging (ID 4103) - cmdlet-level detail, active even without script block logging
+    try {
+        $filter = @{ LogName = 'Microsoft-Windows-PowerShell/Operational'; ID = 4103; StartTime = $startTime; EndTime = $endTime }
+        $evts = Get-WinEvent -FilterHashtable $filter -MaxEvents 500 -ErrorAction Stop
+        foreach ($e in $evts) { $allEvents.Add($e) }
+        Write-Host "    [+] Module Logging (4103): $($evts.Count) events" -ForegroundColor DarkGray
+    } catch {}
+
+    # Source 3: Classic Windows PowerShell log - session starts/stops, works without script block logging
+    try {
+        $filter = @{ LogName = 'Windows PowerShell'; ID = @(400, 403, 800); StartTime = $startTime; EndTime = $endTime }
+        $evts = Get-WinEvent -FilterHashtable $filter -MaxEvents 500 -ErrorAction Stop
+        foreach ($e in $evts) { $allEvents.Add($e) }
+        Write-Host "    [+] Classic PS Log (400/403/800): $($evts.Count) events" -ForegroundColor DarkGray
+    } catch {}
+
+    # Sort all events by time descending
+    $events = if ($allEvents.Count -gt 0) { $allEvents | Sort-Object TimeCreated -Descending } else { $null }
+    
+    # Deduplicate - same timestamp + same user could produce events across multiple logs
+    $seenKeys = [System.Collections.Generic.HashSet[string]]::new()
+    $eventsDeduped = [System.Collections.Generic.List[object]]::new()
+    foreach ($e in $events) {
+        # Key: rounded to nearest second + event ID + SID
+        $key = "$($e.TimeCreated.ToString('yyyy-MM-dd HH:mm:ss'))_$($e.Id)_$($e.UserId)"
+        if ($seenKeys.Add($key)) { $eventsDeduped.Add($e) }
+    }
+    $events = $eventsDeduped
     
     $results = @()
 
@@ -1436,7 +1463,30 @@ function Get-PSHistory {
             # Skip high-noise system accounts with no investigative value in PS history
             if ($resolvedUser -match "^NT AUTHORITY\\(SYSTEM|NETWORK SERVICE|LOCAL SERVICE)$") { continue }
 
-            $scriptBlock = $event.Properties[2].Value
+            # Extract script block content based on event ID
+            $scriptBlock = ""
+            switch ($event.Id) {
+                4104 {
+                    # Script Block Logging - full script content in Properties[2]
+                    $scriptBlock = $event.Properties[2].Value
+                }
+                4103 {
+                    # Module Logging - command name and parameters in message
+                    $msg = try { $event.Message } catch { "" }
+                    $cmdLine = if ($msg -match 'CommandName=(.+?)[\r\n]') { $Matches[1].Trim() } else { "" }
+                    $params  = if ($msg -match 'CommandLine=(.+?)[\r\n]') { $Matches[1].Trim() } else { "" }
+                    $scriptBlock = if ($params) { "$cmdLine $params" } else { $cmdLine }
+                }
+                { $_ -in @(400, 403, 800) } {
+                    # Classic log - host application and command details
+                    $msg = try { $event.Message } catch { "" }
+                    $hostApp = if ($msg -match 'HostApplication=(.+?)[\r\n]') { $Matches[1].Trim() } else { "" }
+                    $cmdLine = if ($msg -match 'CommandLine=(.+?)[\r\n]') { $Matches[1].Trim() } else { "" }
+                    $evtType = switch ($event.Id) { 400 { "PS Session Started" } 403 { "PS Session Ended" } 800 { "PS Pipeline" } }
+                    $scriptBlock = "$evtType | $hostApp$(if ($cmdLine) { " | $cmdLine" })"
+                }
+                default { $scriptBlock = try { $event.Properties[2].Value } catch { $event.Message } }
+            }
 
             # Filter known-benign noisy script blocks
             $noisePatterns = @(
