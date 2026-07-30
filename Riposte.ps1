@@ -2889,19 +2889,42 @@ function Get-SystemInfo {
         Write-Host "`n=== ACTIVE NETWORK CONNECTIONS ===" -ForegroundColor Magenta
         $procMap = @{}
         Get-CimInstance Win32_Process -ErrorAction SilentlyContinue | ForEach-Object { $procMap[[int]$_.ProcessId] = $_.Name }
-        Get-NetTCPConnection | Where-Object State -in @('Established', 'Listen') |
-            ForEach-Object {
-                $pid = [int]$_.OwningProcess
-                $procName = if ($procMap.ContainsKey($pid)) { $procMap[$pid] } else { "Unknown" }
+
+        $connections = $null
+        try {
+            $connections = Get-NetTCPConnection -ErrorAction Stop | Where-Object State -in @('Established','Listen')
+        } catch {}
+
+        if ($connections) {
+            $connections | ForEach-Object {
+                $pid2 = [int]$_.OwningProcess
+                $procName = if ($procMap.ContainsKey($pid2)) { $procMap[$pid2] } else { "Unknown" }
                 [PSCustomObject]@{
                     State         = $_.State
                     LocalAddress  = "$($_.LocalAddress):$($_.LocalPort)"
                     RemoteAddress = "$($_.RemoteAddress):$($_.RemotePort)"
-                    PID           = $pid
+                    PID           = $pid2
                     Process       = $procName
                 }
             } | Sort-Object State, Process |
             Format-Table State, LocalAddress, RemoteAddress, PID, Process -AutoSize | Out-String | Write-Host
+        } else {
+            # Fallback to netstat which works in all shell contexts
+            Write-Host "[*] Using netstat fallback..." -ForegroundColor DarkGray
+            $netstatOutput = netstat -ano 2>$null
+            $netstatLines = $netstatOutput | Where-Object { $_ -match 'ESTABLISHED|LISTENING' }
+            foreach ($line in $netstatLines) {
+                if ($line -match '^\s*(TCP|UDP)\s+(\S+)\s+(\S+)\s+(\S+)\s+(\d+)') {
+                    $proto    = $Matches[1]
+                    $local    = $Matches[2]
+                    $remote   = $Matches[3]
+                    $state    = $Matches[4]
+                    $pid3     = [int]$Matches[5]
+                    $procName = if ($procMap.ContainsKey($pid3)) { $procMap[$pid3] } else { "PID $pid3" }
+                    Write-Host ("  {0,-12} {1,-28} {2,-28} {3,-6} {4}" -f $state, $local, $remote, $pid3, $procName) -ForegroundColor Green
+                }
+            }
+        }
         Pause
     } elseif ($sysChoice -eq 'D') {
         Write-Host "`n=== DNS RESOLVER CACHE ===" -ForegroundColor Magenta
