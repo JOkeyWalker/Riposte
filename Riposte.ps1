@@ -27,6 +27,7 @@ if (-not (Get-PSDrive HKU -ErrorAction SilentlyContinue)) {
 function Show-Banner {
     Write-Host "===============================================================" -ForegroundColor DarkCyan
     Write-Host "  [ Riposte ] - TACTICAL THREAT HUNTING & TRIAGE TOOLKIT       " -ForegroundColor Cyan
+    Write-Host "  Contre-attaque. Traque. Neutralise." -ForegroundColor DarkGray
     Write-Host "===============================================================" -ForegroundColor DarkCyan
     Write-Host "  " -NoNewline; Write-Host "Target OS : " -NoNewline -ForegroundColor Yellow; Write-Host "$((Get-CimInstance Win32_OperatingSystem).Caption)" -ForegroundColor DarkGray
     $currentUser = "$env:USERDOMAIN\$env:USERNAME"
@@ -3163,7 +3164,7 @@ function Show-Menu {
 while ($true) {
     $quit = Show-Menu
     if ($quit -eq $true) {
-        Write-Host "[+] Riposte exited. Shell session preserved." -ForegroundColor Green
+        Write-Host "[+] Riposte exited. Session preservee." -ForegroundColor Green
         break
     }
     if ($quit -eq 'destruct') {
