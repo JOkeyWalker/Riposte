@@ -2888,15 +2888,16 @@ function Get-SystemInfo {
     if ($sysChoice -eq 'C') {
         Write-Host "`n=== ACTIVE NETWORK CONNECTIONS ===" -ForegroundColor Magenta
         $procMap = @{}
-        Get-Process | ForEach-Object { $procMap[$_.Id] = $_.Name }
+        Get-CimInstance Win32_Process -ErrorAction SilentlyContinue | ForEach-Object { $procMap[[int]$_.ProcessId] = $_.Name }
         Get-NetTCPConnection | Where-Object State -in @('Established', 'Listen') |
             ForEach-Object {
-                $procName = if ($procMap.ContainsKey($_.OwningProcess)) { $procMap[$_.OwningProcess] } else { "PID $($_.OwningProcess)" }
+                $pid = [int]$_.OwningProcess
+                $procName = if ($procMap.ContainsKey($pid)) { $procMap[$pid] } else { "Unknown" }
                 [PSCustomObject]@{
                     State         = $_.State
                     LocalAddress  = "$($_.LocalAddress):$($_.LocalPort)"
                     RemoteAddress = "$($_.RemoteAddress):$($_.RemotePort)"
-                    PID           = $_.OwningProcess
+                    PID           = $pid
                     Process       = $procName
                 }
             } | Sort-Object State, Process |
