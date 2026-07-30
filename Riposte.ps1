@@ -91,6 +91,28 @@ function Resolve-SidToUsername {
         }
     } catch {}
 
+    # Attempt 4: Azure AD SID (S-1-12-1-*) - extract username from whoami or logged-on user registry
+    if ($sid -match '^S-1-12-1-') {
+        try {
+            # Check CIM for logged-on users matching this SID
+            $loggedOn = Get-CimInstance Win32_LoggedOnUser -ErrorAction SilentlyContinue |
+                Where-Object { $_.Antecedent -match 'Name="([^"]+)".*Domain="([^"]+)"' } |
+                Select-Object -First 1
+            if ($loggedOn -and $loggedOn.Antecedent -match 'Name="([^"]+)"') {
+                return $Matches[1]
+            }
+        } catch {}
+        # Fall back to profile path if we found one above but username extraction failed
+        try {
+            $profileKey = "HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\ProfileList\$sid"
+            if (Test-Path $profileKey) {
+                $profilePath = (Get-ItemProperty -Path $profileKey -Name ProfileImagePath -ErrorAction Stop).ProfileImagePath
+                $folderName = Split-Path $profilePath -Leaf
+                return "AzureAD\$folderName"
+            }
+        } catch {}
+    }
+
     return "SID: $sid"
 }
 
@@ -1388,14 +1410,40 @@ function Get-PSHistory {
             
             # Skip SentinelOne remote shell operator activity
             if ($resolvedUser -match "(?i)SentinelRSHUser|SentinelOne") { continue }
-            
+
             # Skip high-noise system accounts with no investigative value in PS history
             if ($resolvedUser -match "^NT AUTHORITY\\(SYSTEM|NETWORK SERVICE|LOCAL SERVICE)$") { continue }
-            
+
+            $scriptBlock = $event.Properties[2].Value
+
+            # Filter known-benign noisy script blocks
+            $noisePatterns = @(
+                '^\s*prompt\s*$',
+                '__PSScriptPolicyTest',
+                '^\s*\[datetime\]::Now\s*$',
+                '^\s*Get-Date\s*$',
+                '^\s*Get-Random\s*$',
+                'SentinelOne.*TelemetryProvider',
+                'PSScheduledJob.*ScheduledJobTrigger',
+                '^\s*# PowerShell test file',
+                'Microsoft\.PowerShell\.Cmdletization\.Cim',       # CIM auto-generated cmdlet wrappers
+                '\[Microsoft\.PowerShell\.Cmdletization\.Generated\]', # Generated CIM modules
+                'root/standardcimv2/MSFT_',                        # Windows CIM class module loads
+                '__cmdletization_BindCommonParameters',             # CIM module boilerplate
+                'Microsoft\.PowerShell\.Core\\Export-ModuleMember', # Module export boilerplate
+                '^\s*#requires -version'                            # Module version declarations only
+            )
+            $isNoise = $false
+            foreach ($pattern in $noisePatterns) {
+                if ($scriptBlock -match $pattern) { $isNoise = $true; break }
+            }
+            if ($isNoise) { continue }
+            if ($scriptBlock.Trim().Length -lt 10) { continue }
+
             $results += [PSCustomObject]@{
                 Time        = $event.TimeCreated.ToString("yyyy-MM-dd HH:mm:ss")
                 User        = $resolvedUser
-                ScriptBlock = $event.Properties[2].Value
+                ScriptBlock = $scriptBlock
             }
         }
         
