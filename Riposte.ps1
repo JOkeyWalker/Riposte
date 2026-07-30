@@ -2055,7 +2055,15 @@ function Get-RecentlyWrittenFiles {
     $startTime = $parsedTime.StartTime
     Write-Host "`n[*] Scanning high-value drop directories for files written since: $($startTime.ToString('yyyy-MM-dd HH:mm:ss'))..." -ForegroundColor Yellow
 
-    $targetExtensions = @("*.exe", "*.dll", "*.bat", "*.ps1", "*.vbs", "*.js", "*.zip", "*.iso", "*.lnk", "*.msi", "*.hta", "*.scr", "*.cmd", "*.wsf")
+    # Executable/script types - primary threat indicators
+    $targetExtensions = @(
+        "*.exe", "*.dll", "*.bat", "*.ps1", "*.vbs", "*.js", "*.msi", "*.hta", "*.scr", "*.cmd", "*.wsf",
+        "*.zip", "*.rar", "*.7z", "*.iso",
+        # Common lure file types attackers use to disguise payloads
+        "*.pdf", "*.docx", "*.xlsx", "*.png", "*.jpg", "*.jpeg"
+    )
+    # Extensions to flag as noise even if found (shortcuts - log separately)
+    $noisyExtensions = @(".lnk", ".url")
     
     $searchPaths = @()
     $userDirs = Get-ChildItem -Path "C:\Users" -Directory -Force -ErrorAction SilentlyContinue | Where-Object { $_.Name -notin @("All Users", "Default", "Default User", "Public") }
@@ -2082,9 +2090,14 @@ function Get-RecentlyWrittenFiles {
                 ForEach-Object { $searchPaths += $_.FullName }
         }
 
-        # AppData\Roaming common drop locations
+        # AppData\Roaming - scan root-level subfolders, exclude Microsoft (contains Recent, lnk noise)
         $searchPaths += Join-Path $ud.FullName "AppData\Roaming\Microsoft\Windows\Start Menu\Programs"
-        $searchPaths += Join-Path $ud.FullName "AppData\Roaming"
+        $roamingBase = Join-Path $ud.FullName "AppData\Roaming"
+        if (Test-Path $roamingBase) {
+            Get-ChildItem $roamingBase -Directory -ErrorAction SilentlyContinue |
+                Where-Object { $_.Name -ne "Microsoft" } |
+                ForEach-Object { $searchPaths += $_.FullName }
+        }
         # Specific Microsoft subpaths known to be used as drop locations
         $searchPaths += Join-Path $ud.FullName "AppData\Local\Microsoft\Windows\Caches"
     }
@@ -2111,6 +2124,8 @@ function Get-RecentlyWrittenFiles {
                 $files = Get-ChildItem -Path $currentPath -Filter $ext -File -Force -ErrorAction SilentlyContinue
                 foreach ($file in $files) {
                     if ($file.LastWriteTime -ge $startTime -or $file.CreationTime -ge $startTime) {
+                        # Skip shortcut/url files - they are Windows artifacts, not threats
+                        if ($noisyExtensions -contains $file.Extension.ToLower()) { continue }
                         $owner = Get-AssociatedUser -path $file.FullName
                         $hashes = Get-FileHashes -filePath $file.FullName
                         $matchCount++
