@@ -1418,20 +1418,11 @@ function Get-PSHistory {
 
             # Filter known-benign noisy script blocks
             $noisePatterns = @(
-                '^\s*prompt\s*$',
-                '__PSScriptPolicyTest',
-                '^\s*\[datetime\]::Now\s*$',
-                '^\s*Get-Date\s*$',
-                '^\s*Get-Random\s*$',
-                'SentinelOne.*TelemetryProvider',
-                'PSScheduledJob.*ScheduledJobTrigger',
-                '^\s*# PowerShell test file',
-                'Microsoft\.PowerShell\.Cmdletization\.Cim',       # CIM auto-generated cmdlet wrappers
-                '\[Microsoft\.PowerShell\.Cmdletization\.Generated\]', # Generated CIM modules
-                'root/standardcimv2/MSFT_',                        # Windows CIM class module loads
-                '__cmdletization_BindCommonParameters',             # CIM module boilerplate
-                'Microsoft\.PowerShell\.Core\\Export-ModuleMember', # Module export boilerplate
-                '^\s*#requires -version'                            # Module version declarations only
+                '__PSScriptPolicyTest',                                 # PS execution policy test - only created by PowerShell itself
+                'Microsoft\.PowerShell\.Cmdletization\.Cim',            # CIM auto-generated cmdlet wrappers
+                '\[Microsoft\.PowerShell\.Cmdletization\.Generated\]',  # Generated CIM module tag
+                'root/standardcimv2/MSFT_',                             # Windows CIM class module loads
+                '__cmdletization_BindCommonParameters'                  # CIM module boilerplate function
             )
             $isNoise = $false
             foreach ($pattern in $noisePatterns) {
