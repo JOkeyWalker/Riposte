@@ -835,8 +835,10 @@ function Get-Persistence {
     $results = @()
 
     # --- 1. REGISTRY RUN KEYS (HKLM, Loaded HKU, and Offline HKU) ---
+    Write-Host "[*] Checking Registry Run Keys..." -ForegroundColor DarkGray
     try {
         $regKeys = Get-RegistryRunKeys
+        Write-Host "    Found $($regKeys.Count) run key entries" -ForegroundColor DarkGray
         foreach ($rk in $regKeys) {
             $resolvedPath = Extract-FilePath -cmdline $rk.Value
             $hashes = Get-FileHashes -filePath $resolvedPath
@@ -857,8 +859,10 @@ function Get-Persistence {
     }
 
     # --- 2. SCHEDULED TASKS ---
+    Write-Host "[*] Checking Scheduled Tasks..." -ForegroundColor DarkGray
     try {
         $tasks = Get-ScheduledTask | Where-Object { $_.TaskPath -notmatch "^\\Microsoft\\" -and $_.State -ne "Disabled" }
+        Write-Host "    Found $($tasks.Count) non-Microsoft active tasks to review" -ForegroundColor DarkGray
         foreach ($task in $tasks) {
             try {
                 $taskInfo = Get-ScheduledTaskInfo -TaskName $task.TaskName -TaskPath $task.TaskPath -ErrorAction SilentlyContinue
@@ -939,6 +943,7 @@ function Get-Persistence {
     }
 
     # --- 4. STARTUP FOLDERS ---
+    Write-Host "[*] Checking Startup Folders..." -ForegroundColor DarkGray
     try {
         $publicStartup = "$env:ProgramData\Microsoft\Windows\Start Menu\Programs\StartUp"
         if (Test-Path $publicStartup) {
@@ -1619,6 +1624,16 @@ function Invoke-EventLogSearch {
         [string]$regexPattern
     )
     $huntStartTime = Get-Date
+    # Build local SID->username cache from ProfileList (resolves domain SIDs without DC)
+    $sidCache = @{}
+    try {
+        Get-ChildItem "HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\ProfileList" -ErrorAction SilentlyContinue | ForEach-Object {
+            $pp = (Get-ItemProperty $_.PSPath -Name ProfileImagePath -ErrorAction SilentlyContinue).ProfileImagePath
+            if ($pp) { $sidCache[$_.PSChildName] = (Split-Path $pp -Leaf) }
+        }
+    } catch {}
+
+    $results = [System.Collections.Generic.List[PSCustomObject]]::new()
 
     # Event log targets with friendly descriptions
     $eventLogTargets = @(
@@ -1674,10 +1689,11 @@ function Invoke-EventLogSearch {
                 if (-not $msg) { $msg = ($evt.Properties | ForEach-Object { $_.Value }) -join " " }
                 if (-not ($msg -match $regexPattern)) { continue }
 
-                # Resolve user
+                # Resolve user - check local ProfileList cache first (no DC needed)
                 $evtUser = "N/A"
                 if ($evt.UserId) {
-                    $evtUser = Resolve-SidToUsername -sid $evt.UserId.ToString()
+                    $sidStr = $evt.UserId.ToString()
+                    $evtUser = if ($sidCache.ContainsKey($sidStr)) { $sidCache[$sidStr] } else { Resolve-SidToUsername -sid $sidStr }
                 } elseif ($msg -match '(?i)Account Name:\s+(\S+)') {
                     $evtUser = $Matches[1]
                 } elseif ($msg -match '(?i)User Name:\s+(\S+)') {
@@ -1824,23 +1840,23 @@ function Invoke-EventLogSearch {
                         "Log Cleared: $channel | By: $acct"
                     }
 
-                    # Default - pull the matching keyword line
-
                     # WinRM remote session events
                     { $_ -in @(91, 142, 168, 169) } {
-                        $msg2 = try { $evt.Message } catch { "" }
-                        $srcIP   = if ($msg2 -match 'connection.*?(\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3})|client.*?(\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3})') { $Matches[1] + $Matches[2] } else { "-" }
-                        $account = if ($msg2 -match 'User:\s+(\S+)|account.*?:\s+(\S+)') { $Matches[1] + $Matches[2] } else { "-" }
-                        $scheme  = if ($msg2 -match 'auth.*?scheme[^:]*:\s*(\S+)|Authentication Scheme:\s*(\S+)') { $Matches[1] + $Matches[2] } else { "-" }
+                        $msg2    = try { $evt.Message } catch { "" }
+                        $srcIP   = if ($msg2 -match '(\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3})') { $Matches[1] } else { "-" }
+                        $account = if ($msg2 -match 'User:\s+(\S+)') { $Matches[1] } elseif ($msg2 -match 'account[^:]*:\s+(\S+)') { $Matches[1] } else { "-" }
+                        $scheme  = if ($msg2 -match 'Authentication Scheme:\s*(\S+)') { $Matches[1] } elseif ($msg2 -match 'auth.*?scheme[^:]*:\s*(\S+)') { $Matches[1] } else { "-" }
                         "Source IP: $srcIP | Account: $account | Auth: $scheme"
                     }
+
+                    # Default - pull the matching keyword line
                     default {
                         $matchLine = ($msg -split "`n" | Where-Object { $_ -match $regexPattern } | Select-Object -First 1)
                         if ($matchLine) { $matchLine.Trim() } else { $msg.Substring(0, [Math]::Min(250, $msg.Length)).Trim() }
                     }
                 }
 
-                $results += [PSCustomObject]@{
+                $results.Add([PSCustomObject]@{
                     Type            = "Event: $shortLog"
                     User            = $evtUser
                     Timestamp       = $evt.TimeCreated.ToString("yyyy-MM-dd HH:mm:ss")
@@ -1850,7 +1866,7 @@ function Invoke-EventLogSearch {
                     SHA256          = "N/A"
                     RemediationType = "None"
                     RemediationPath = "N/A"
-                }
+                })
             }
         } catch { }
     }
@@ -1904,7 +1920,16 @@ function Get-EventLogSearch {
     Write-Host ""
     Write-Host "[*] Searching event logs from $($parsedTime.StartTime.ToString('yyyy-MM-dd HH:mm:ss')) to $($parsedTime.EndTime.ToString('yyyy-MM-dd HH:mm:ss'))..." -ForegroundColor Yellow
 
-    $results = @()
+    # Build local SID->username cache from ProfileList (resolves domain SIDs without DC)
+    $sidCache = @{}
+    try {
+        Get-ChildItem "HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\ProfileList" -ErrorAction SilentlyContinue | ForEach-Object {
+            $pp = (Get-ItemProperty $_.PSPath -Name ProfileImagePath -ErrorAction SilentlyContinue).ProfileImagePath
+            if ($pp) { $sidCache[$_.PSChildName] = (Split-Path $pp -Leaf) }
+        }
+    } catch {}
+
+    $results = [System.Collections.Generic.List[PSCustomObject]]::new()
     $huntStartTime = Get-Date
 
     # Event log targets with friendly descriptions
@@ -1961,10 +1986,11 @@ function Get-EventLogSearch {
                 if (-not $msg) { $msg = ($evt.Properties | ForEach-Object { $_.Value }) -join " " }
                 if (-not ($msg -match $regexPattern)) { continue }
 
-                # Resolve user
+                # Resolve user - check local ProfileList cache first (no DC needed)
                 $evtUser = "N/A"
                 if ($evt.UserId) {
-                    $evtUser = Resolve-SidToUsername -sid $evt.UserId.ToString()
+                    $sidStr = $evt.UserId.ToString()
+                    $evtUser = if ($sidCache.ContainsKey($sidStr)) { $sidCache[$sidStr] } else { Resolve-SidToUsername -sid $sidStr }
                 } elseif ($msg -match '(?i)Account Name:\s+(\S+)') {
                     $evtUser = $Matches[1]
                 } elseif ($msg -match '(?i)User Name:\s+(\S+)') {
@@ -2111,23 +2137,23 @@ function Get-EventLogSearch {
                         "Log Cleared: $channel | By: $acct"
                     }
 
-                    # Default - pull the matching keyword line
-
                     # WinRM remote session events
                     { $_ -in @(91, 142, 168, 169) } {
-                        $msg2 = try { $evt.Message } catch { "" }
-                        $srcIP   = if ($msg2 -match 'connection.*?(\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3})|client.*?(\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3})') { $Matches[1] + $Matches[2] } else { "-" }
-                        $account = if ($msg2 -match 'User:\s+(\S+)|account.*?:\s+(\S+)') { $Matches[1] + $Matches[2] } else { "-" }
-                        $scheme  = if ($msg2 -match 'auth.*?scheme[^:]*:\s*(\S+)|Authentication Scheme:\s*(\S+)') { $Matches[1] + $Matches[2] } else { "-" }
+                        $msg2    = try { $evt.Message } catch { "" }
+                        $srcIP   = if ($msg2 -match '(\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3})') { $Matches[1] } else { "-" }
+                        $account = if ($msg2 -match 'User:\s+(\S+)') { $Matches[1] } elseif ($msg2 -match 'account[^:]*:\s+(\S+)') { $Matches[1] } else { "-" }
+                        $scheme  = if ($msg2 -match 'Authentication Scheme:\s*(\S+)') { $Matches[1] } elseif ($msg2 -match 'auth.*?scheme[^:]*:\s*(\S+)') { $Matches[1] } else { "-" }
                         "Source IP: $srcIP | Account: $account | Auth: $scheme"
                     }
+
+                    # Default - pull the matching keyword line
                     default {
                         $matchLine = ($msg -split "`n" | Where-Object { $_ -match $regexPattern } | Select-Object -First 1)
                         if ($matchLine) { $matchLine.Trim() } else { $msg.Substring(0, [Math]::Min(250, $msg.Length)).Trim() }
                     }
                 }
 
-                $results += [PSCustomObject]@{
+                $results.Add([PSCustomObject]@{
                     Type            = "Event: $shortLog"
                     User            = $evtUser
                     Timestamp       = $evt.TimeCreated.ToString("yyyy-MM-dd HH:mm:ss")
@@ -2137,7 +2163,7 @@ function Get-EventLogSearch {
                     SHA256          = "N/A"
                     RemediationType = "None"
                     RemediationPath = "N/A"
-                }
+                })
             }
         } catch { }
     }
@@ -2452,7 +2478,10 @@ function Get-RMMHunt {
         "HKCU:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall"
     )
 
+    $toolIndex = 0
     foreach ($tool in $rmmTools) {
+        $toolIndex++
+        Write-Host "[*] Checking $($tool.Name) ($toolIndex/$($rmmTools.Count))..." -ForegroundColor DarkGray
         $detections = @()
 
         # 1. Running processes
