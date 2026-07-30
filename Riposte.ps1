@@ -840,7 +840,7 @@ function Get-Persistence {
         $regKeys = Get-RegistryRunKeys
         Write-Host "    Found $($regKeys.Count) run key entries" -ForegroundColor DarkGray
         foreach ($rk in $regKeys) {
-            $resolvedPath = Extract-FilePath -cmdline $rk.Value
+            $resolvedPath = if ($rk.Value) { Extract-FilePath -cmdline $rk.Value } else { $null }
             $hashes = Get-FileHashes -filePath $resolvedPath
             $results += [PSCustomObject]@{
                 Type            = "Registry Run Keys"
