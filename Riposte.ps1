@@ -742,7 +742,7 @@ function Process-RemediationLoop {
                         $item.Value -split '\|' | ForEach-Object {
                             if ($_ -match '^(SC|EXE|RELAY):(.*)$') { $scParts[$Matches[1]] = $Matches[2].Trim() }
                         }
-                        if ($scParts['EXE'])   { Write-Host "       Exe Path  : " -NoNewline -ForegroundColor White;   Write-Host $scParts['EXE']   -ForegroundColor DarkGray }
+                        if ($scParts['EXE'])   { Write-Host "       Exe Path  : " -NoNewline -ForegroundColor White;   Write-Host $scParts['EXE']   -ForegroundColor Cyan }
                         if ($scParts['RELAY']) { Write-Host "       Relay     : " -NoNewline -ForegroundColor White;   Write-Host $scParts['RELAY'] -ForegroundColor DarkYellow }
                     } elseif ($typeGroup.Name -eq "History") {
                         $histParts   = $item.Value -split "`nURL: "
@@ -2715,7 +2715,7 @@ function Get-RMMHunt {
                         Type            = "ScreenConnect Event"
                         User            = "Event ID: $($evt.Id)"
                         Timestamp       = $evt.TimeCreated.ToString("yyyy-MM-dd HH:mm:ss")
-                        Name            = $scUser
+                        Name            = $firstLine
                         Value           = $displayValue
                         SHA1            = "N/A"
                         SHA256          = "N/A"
