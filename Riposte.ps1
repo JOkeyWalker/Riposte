@@ -723,15 +723,10 @@ function Process-RemediationLoop {
                 Write-Host "  ---------------------------------------------------" -ForegroundColor DarkGray
                 
                 foreach ($item in $userGroup.Group) {
+                    # --- Name / label line ---
                     if ($typeGroup.Name -eq "ScreenConnect Event") {
-                        # Parse structured fields - SC:action|EXE:path|RELAY:server
-                        $scParts = @{}
-                        $item.Value -split '\|' | ForEach-Object {
-                            if ($_ -match '^(SC|EXE|RELAY):(.*)$') { $scParts[$Matches[1]] = $Matches[2].Trim() }
-                        }
-                        if ($scParts['SC'])    { Write-Host "       Action    : " -NoNewline -ForegroundColor White;   Write-Host $scParts['SC']    -ForegroundColor Green }
-                        if ($scParts['EXE'])   { Write-Host "       Exe Path  : " -NoNewline -ForegroundColor White;   Write-Host $scParts['EXE']   -ForegroundColor DarkGray }
-                        if ($scParts['RELAY']) { Write-Host "       Relay     : " -NoNewline -ForegroundColor White;   Write-Host $scParts['RELAY'] -ForegroundColor DarkYellow }
+                        Write-Host "   [$($item.MenuIndex)] Name      : $($item.Name)" -ForegroundColor White
+                        Write-Host "       Timestamp : $($item.Timestamp)" -ForegroundColor DarkGray
                     } elseif ($typeGroup.Name -eq "History") {
                         Write-Host "   [$($item.MenuIndex)] URL       : $($item.Name)" -ForegroundColor White
                     } else {
@@ -739,6 +734,15 @@ function Process-RemediationLoop {
                         Write-Host "       Timestamp : $($item.Timestamp)" -ForegroundColor DarkGray
                     }
                     
+                    # --- Value / detail block ---
+                    if ($typeGroup.Name -eq "ScreenConnect Event") {
+                        $scParts = @{}
+                        $item.Value -split '\|' | ForEach-Object {
+                            if ($_ -match '^(SC|EXE|RELAY):(.*)$') { $scParts[$Matches[1]] = $Matches[2].Trim() }
+                        }
+                        if ($scParts['SC'])    { Write-Host "       Action    : " -NoNewline -ForegroundColor White;   Write-Host $scParts['SC']    -ForegroundColor Green }
+                        if ($scParts['EXE'])   { Write-Host "       Exe Path  : " -NoNewline -ForegroundColor White;   Write-Host $scParts['EXE']   -ForegroundColor DarkGray }
+                        if ($scParts['RELAY']) { Write-Host "       Relay     : " -NoNewline -ForegroundColor White;   Write-Host $scParts['RELAY'] -ForegroundColor DarkYellow }
                     } elseif ($typeGroup.Name -eq "History") {
                         $histParts   = $item.Value -split "`nURL: "
                         $histBrowser = $histParts[0] -replace "^Browser: ",""
@@ -750,7 +754,6 @@ function Process-RemediationLoop {
                         }
                         Write-Host "       URL       : $histUrl" -ForegroundColor Green
                     } elseif ($typeGroup.Name -like "Event:*") {
-                        # Split pipe-delimited structured detail into labeled lines
                         $segments = $item.Value -split ' \| '
                         foreach ($seg in $segments) {
                             if ($seg -match '^([^:]+):\s*(.*)$') {
