@@ -2702,7 +2702,7 @@ function Get-RMMHunt {
                 $txt = [System.Text.Encoding]::ASCII.GetString($bytes) + [System.Text.Encoding]::Unicode.GetString($bytes)
                 $txt = $txt -replace "&amp;","&"
                 $h = ""; $p = ""
-                if ($txt -match "[?&]h=([^&"'<>\s\x00]+)") { $h = $Matches[1] }
+                if ($txt -match '[?&]h=([^&\s<>\x00]+)') { $h = $Matches[1] -replace '["\x27]','' }
                 if ($txt -match "[?&]p=(\d{2,5})") { $p = $Matches[1] }
                 if ($h) { return if ($p) { "$h`:$p" } else { $h } }
             } catch {}
