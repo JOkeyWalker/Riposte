@@ -663,7 +663,8 @@ function Process-RemediationLoop {
     param(
         [array]$items,
         [string]$title,
-        [switch]$showSCOption
+        [switch]$showSCOption,
+        [switch]$noRemediation
     )
     
     $activeItems = $items
@@ -725,7 +726,8 @@ function Process-RemediationLoop {
                 foreach ($item in $userGroup.Group) {
                     # --- Name / label line ---
                     if ($typeGroup.Name -eq "ScreenConnect Event") {
-                        Write-Host "   [$($item.MenuIndex)] Name      : $($item.Name)" -ForegroundColor White
+                        Write-Host "   [$($item.MenuIndex)] Message   : " -NoNewline -ForegroundColor White
+                        Write-Host $item.Name -ForegroundColor Green
                         Write-Host "       Timestamp : $($item.Timestamp)" -ForegroundColor DarkGray
                     } elseif ($typeGroup.Name -eq "History") {
                         Write-Host "   [$($item.MenuIndex)] URL       : $($item.Name)" -ForegroundColor White
@@ -740,7 +742,6 @@ function Process-RemediationLoop {
                         $item.Value -split '\|' | ForEach-Object {
                             if ($_ -match '^(SC|EXE|RELAY):(.*)$') { $scParts[$Matches[1]] = $Matches[2].Trim() }
                         }
-                        if ($scParts['SC'])    { Write-Host "       Action    : " -NoNewline -ForegroundColor White;   Write-Host $scParts['SC']    -ForegroundColor Green }
                         if ($scParts['EXE'])   { Write-Host "       Exe Path  : " -NoNewline -ForegroundColor White;   Write-Host $scParts['EXE']   -ForegroundColor DarkGray }
                         if ($scParts['RELAY']) { Write-Host "       Relay     : " -NoNewline -ForegroundColor White;   Write-Host $scParts['RELAY'] -ForegroundColor DarkYellow }
                     } elseif ($typeGroup.Name -eq "History") {
@@ -794,7 +795,11 @@ function Process-RemediationLoop {
         if ($showSCOption) {
             Write-Host "  [S]  View ScreenConnect Session History" -ForegroundColor Cyan
         }
-        Write-Host "  Remediation: Enter number(s) (e.g., 1,3,5) | [R] Return to Menu" -ForegroundColor Cyan
+        if ($noRemediation) {
+            Write-Host "  [R]  Return to Menu" -ForegroundColor Cyan
+        } else {
+            Write-Host "  Remediation: Enter number(s) (e.g., 1,3,5) | [R] Return to Menu" -ForegroundColor Cyan
+        }
         Write-Host "---------------------------------------------------------------" -ForegroundColor DarkCyan
         $remedChoice = Repair-Input (Read-Host " [+] Select Option")
         
@@ -818,6 +823,11 @@ function Process-RemediationLoop {
             continue
         }
         
+        if ($noRemediation) {
+            Write-Host "[-] No remediation available in this view." -ForegroundColor Red
+            Start-Sleep -Seconds 1
+            continue
+        }
         $choices = $remedChoice -split '[,\s;]+' | Where-Object { $_ -match '^\d+$' } | ForEach-Object { [int]$_ }
         
         if ($choices.Count -eq 0) {
@@ -2685,20 +2695,21 @@ function Get-RMMHunt {
                 foreach ($evt in $scEvents) {
                     $msg = $evt.Message
 
-                    # Extract structured fields from ScreenConnect event message
-                    $scUser    = if ($msg -match '^([^\(]+\([^\)]+\))') { $Matches[1].Trim() } else { "-" }
-                    $scExe     = if ($msg -match 'Executable Path:\s*([^\|]+)') { $Matches[1].Trim() } else { "-" }
-                    $scRelay   = if ($msg -match 'Relay Server:\s*(relay://[^\|]+|https?://[^\|]+)') { $Matches[1].Trim().TrimEnd('/') } else { "-" }
-                    # Action is everything before the first field separator
-                    $scAction  = if ($msg -match '^[^\r\n]+') {
-                        $first = $Matches[0].Trim()
-                        # Strip the user portion and version from the action line
-                        $first = $first -replace '^\S.*?\(\d+\)\s*', '' -replace '\|\s*Version:[^|]+', '' -replace '^\s*\|\s*', ''
-                        $first.Trim().TrimEnd('|').Trim()
-                    } else { "-" }
+                    # Split message into clean lines
+                    $msgLines = $msg -split "`r?`n" | Where-Object { $_.Trim() -ne "" } | ForEach-Object { $_.Trim() }
 
-                    # Build clean display value
-                    $displayValue = "SC:$scAction|EXE:$scExe|RELAY:$scRelay"
+                    # First line is the action (e.g. "Administrator Connected")
+                    $firstLine = if ($msgLines.Count -gt 0) { $msgLines[0].TrimEnd("|").Trim() } else { "-" }
+
+                    # Extract Executable Path and Relay Server from subsequent lines
+                    $scExe = "-"
+                    $scRelay = "-"
+                    foreach ($line in $msgLines) {
+                        if ($line -match "^Executable Path:\s*(.+)$") { $scExe = $Matches[1].Trim() }
+                        if ($line -match "^Relay Server:\s*(.+)$") { $scRelay = $Matches[1].Trim().TrimEnd("/") }
+                    }
+
+                    $displayValue = "SC:$firstLine|EXE:$scExe|RELAY:$scRelay"
 
                     $scResults.Add([PSCustomObject]@{
                         Type            = "ScreenConnect Event"
@@ -2712,7 +2723,7 @@ function Get-RMMHunt {
                         RemediationPath = "N/A"
                     })
                 }
-                Process-RemediationLoop -items $scResults -title "SCREENCONNECT SESSION HISTORY"
+                Process-RemediationLoop -items $scResults -title "SCREENCONNECT SESSION HISTORY" -noRemediation
         }
     } else {
         Write-Host "`n[+] No known RMM software detected on this endpoint." -ForegroundColor Green
