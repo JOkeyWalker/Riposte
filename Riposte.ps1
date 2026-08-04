@@ -777,7 +777,18 @@ function Process-RemediationLoop {
                         # RMM: ScreenConnect relay info stored in SHA1 field
                         if ($typeGroup.Name -like "RMM:*" -and $item.SHA1 -notmatch '^[a-f0-9]{40}$') {
                             Write-Host "       Relay     : " -NoNewline -ForegroundColor White
-                            Write-Host $item.SHA1 -ForegroundColor DarkYellow
+                            if ($item.SHA1 -match '\[OURS\]') {
+                                $relayBase = $item.SHA1 -replace '\s*\[OURS\]',''
+                                Write-Host $relayBase -NoNewline -ForegroundColor DarkYellow
+                                Write-Host "  [OURS]" -ForegroundColor Green
+                            } elseif ($item.SHA1 -match '\[UNKNOWN') {
+                                $relayBase = $item.SHA1 -replace '\s*\[UNKNOWN[^\]]*\]',''
+                                $trustTag  = [regex]::Match($item.SHA1, '\[UNKNOWN[^\]]*\]').Value
+                                Write-Host $relayBase -NoNewline -ForegroundColor DarkYellow
+                                Write-Host "  $trustTag" -ForegroundColor Red
+                            } else {
+                                Write-Host $item.SHA1 -ForegroundColor DarkYellow
+                            }
                         } else {
                             Write-Host "       SHA1      : $($item.SHA1)" -ForegroundColor DarkYellow
                             Write-Host "       SHA256    : $($item.SHA256)" -ForegroundColor DarkYellow
@@ -2644,19 +2655,158 @@ function Get-RMMHunt {
                 }
             }
 
+            # Relay trust: check if relay is on known-good list
+            $relayTrust = ""
+            if ($relayInfo) {
+                $knownRelays = @($env:SC_KNOWN_RELAY) + @("screenconnect.com","connectwise.com")
+                $isKnown = $false
+                foreach ($kr in $knownRelays) {
+                    if ($kr -and $relayInfo -like "*$kr*") { $isKnown = $true; break }
+                }
+                if ($relayInfo -match "^\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}") {
+                    $relayTrust = " [UNKNOWN - IP-based relay]"
+                } elseif ($isKnown) {
+                    $relayTrust = " [OURS]"
+                } else {
+                    $relayTrust = " [UNKNOWN]"
+                }
+            }
+
             $results += [PSCustomObject]@{
                 Type            = "RMM: $($tool.Name)"
                 User            = $det.DetectionType
                 Timestamp       = "Installed: $dateStr"
                 Name            = $tool.Name
                 Value           = $det.Detail
-                SHA1            = if ($relayInfo) { $relayInfo } else { "N/A" }
+                SHA1            = if ($relayInfo) { "$relayInfo$relayTrust" } else { "N/A" }
                 SHA256          = "N/A"
                 RemediationType = $det.RemType
                 RemediationPath = $det.RemPath
             }
         }
     }
+
+    # --- SCREENCONNECT EXTENDED DETECTION ---
+    Write-Host "[*] Checking ScreenConnect ClickOnce, URI handlers, temp artifacts, prefetch..." -ForegroundColor DarkGray
+
+    # Helper: extract relay host from any config/resource file in a directory
+    function Get-SCRelayFromDir {
+        param([string]$dir)
+        if (-not $dir -or -not (Test-Path $dir)) { return "" }
+        $files = Get-ChildItem $dir -Recurse -File -ErrorAction SilentlyContinue |
+            Where-Object { $_.Name -match "user\.config|\.config|\.resources" } |
+            Select-Object -First 20
+        foreach ($f in $files) {
+            try {
+                $bytes = [System.IO.File]::ReadAllBytes($f.FullName)
+                $txt = [System.Text.Encoding]::ASCII.GetString($bytes) + [System.Text.Encoding]::Unicode.GetString($bytes)
+                $txt = $txt -replace "&amp;","&"
+                $h = ""; $p = ""
+                if ($txt -match "[?&]h=([^&"'<>\s\x00]+)") { $h = $Matches[1] }
+                if ($txt -match "[?&]p=(\d{2,5})") { $p = $Matches[1] }
+                if ($h) { return if ($p) { "$h`:$p" } else { $h } }
+            } catch {}
+        }
+        return ""
+    }
+
+    # ClickOnce detection - scre*tion* folders under AppData\Local\Apps.0
+    try {
+        Get-ChildItem "C:\Users" -Directory -ErrorAction SilentlyContinue |
+            Where-Object { $_.Name -notmatch "^(Public|Default|Default User|All Users)$" } |
+            ForEach-Object {
+                $appsPath = "$($_.FullName)\AppData\Local\Apps\2.0"
+                if (-not (Test-Path $appsPath)) { return }
+                $scDirs = Get-ChildItem $appsPath -Recurse -Directory -Filter "scre*tion*" -Force -ErrorAction SilentlyContinue
+                foreach ($sd in $scDirs) {
+                    $hasPayload = (Get-ChildItem $sd.FullName -File -Force -ErrorAction SilentlyContinue | Where-Object { $_.Name -match "\.config|\.resources|\.exe" }).Count -gt 0
+                    if (-not $hasPayload) { continue }
+                    $relay = Get-SCRelayFromDir $sd.FullName
+                    $trust = if ($relay -match "^\d{1,3}\.") { " [UNKNOWN - IP-based]" } elseif ($relay -match "screenconnect\.com|connectwise\.com") { " [OURS]" } elseif ($relay) { " [UNKNOWN]" } else { "" }
+                    $installDate = try { $sd.CreationTime.ToString("yyyy-MM-dd HH:mm:ss") } catch { "Unknown" }
+                    $results += [PSCustomObject]@{
+                        Type            = "RMM: ScreenConnect"
+                        User            = "ClickOnce (Browser Launch)"
+                        Timestamp       = "Installed: $installDate"
+                        Name            = "ScreenConnect"
+                        Value           = $sd.FullName
+                        SHA1            = if ($relay) { "$relay$trust" } else { "N/A" }
+                        SHA256          = "N/A"
+                        RemediationType = "File"
+                        RemediationPath = $sd.FullName
+                    }
+                }
+            }
+    } catch {}
+
+    # URI protocol handler detection - HKLM and HKCU Classes sc-*
+    foreach ($hive in @("HKLM:\SOFTWARE\Classes","HKCU:\SOFTWARE\Classes")) {
+        try {
+            Get-ChildItem $hive -ErrorAction SilentlyContinue |
+                Where-Object { $_.PSChildName -like "sc-*" } |
+                ForEach-Object {
+                    $keyPath = $_.PSPath
+                    $lastWrite = try { $_.LastWriteTime.ToString("yyyy-MM-dd HH:mm:ss") } catch { "Unknown" }
+                    $results += [PSCustomObject]@{
+                        Type            = "RMM: ScreenConnect"
+                        User            = "URI Handler (Registry)"
+                        Timestamp       = "Key modified: $lastWrite"
+                        Name            = "ScreenConnect"
+                        Value           = "$hive\$($_.PSChildName)"
+                        SHA1            = "N/A"
+                        SHA256          = "N/A"
+                        RemediationType = "Registry"
+                        RemediationPath = $keyPath
+                    }
+                }
+        } catch {}
+    }
+
+    # Temp directory artifacts - one-time/attended sessions
+    $tempRoots = @("C:\Windows\Temp\ScreenConnect")
+    try {
+        Get-ChildItem "C:\Users" -Directory -ErrorAction SilentlyContinue |
+            ForEach-Object { $tempRoots += "$($_.FullName)\AppData\Local\Temp\ScreenConnect" }
+    } catch {}
+    foreach ($tr in ($tempRoots | Where-Object { Test-Path $_ })) {
+        try {
+            Get-ChildItem $tr -Directory -ErrorAction SilentlyContinue | ForEach-Object {
+                $relay = Get-SCRelayFromDir $_.FullName
+                $trust = if ($relay -match "^\d{1,3}\.") { " [UNKNOWN - IP-based]" } elseif ($relay -match "screenconnect\.com|connectwise\.com") { " [OURS]" } elseif ($relay) { " [UNKNOWN]" } else { "" }
+                $installDate = try { $_.CreationTime.ToString("yyyy-MM-dd HH:mm:ss") } catch { "Unknown" }
+                $results += [PSCustomObject]@{
+                    Type            = "RMM: ScreenConnect"
+                    User            = "Temp Artifact (One-Time Session)"
+                    Timestamp       = "Created: $installDate"
+                    Name            = "ScreenConnect"
+                    Value           = $_.FullName
+                    SHA1            = if ($relay) { "$relay$trust" } else { "N/A" }
+                    SHA256          = "N/A"
+                    RemediationType = "File"
+                    RemediationPath = $_.FullName
+                }
+            }
+        } catch {}
+    }
+
+    # Prefetch evidence - execution proof even after binary removed
+    try {
+        Get-ChildItem "C:\Windows\Prefetch" -Filter "SCREENCONNECT*.pf" -ErrorAction SilentlyContinue |
+            ForEach-Object {
+                $lastExec = try { $_.LastWriteTime.ToString("yyyy-MM-dd HH:mm:ss") } catch { "Unknown" }
+                $results += [PSCustomObject]@{
+                    Type            = "RMM: ScreenConnect"
+                    User            = "Prefetch Evidence"
+                    Timestamp       = "Last executed: $lastExec"
+                    Name            = "ScreenConnect"
+                    Value           = "$($_.FullName) | Execution confirmed even if binary removed"
+                    SHA1            = "N/A"
+                    SHA256          = "N/A"
+                    RemediationType = "File"
+                    RemediationPath = $_.FullName
+                }
+            }
+    } catch {}
 
     if ($results.Count -gt 0) {
         $scFound = $results | Where-Object { $_.Type -like "RMM: ScreenConnect*" } | Select-Object -First 1
