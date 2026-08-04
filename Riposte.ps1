@@ -2629,6 +2629,68 @@ function Get-RMMHunt {
 
     if ($results.Count -gt 0) {
         Process-RemediationLoop -items $results -title "RMM SOFTWARE HUNT RESULTS"
+
+        # Check if ScreenConnect was found - offer session history pivot
+        $scFound = $results | Where-Object { $_.Type -like "RMM: ScreenConnect*" } | Select-Object -First 1
+        if ($scFound) {
+            Show-Banner
+            Write-Host "===============================================================" -ForegroundColor DarkCyan
+            Write-Host "  SCREENCONNECT DETECTED" -ForegroundColor Yellow
+            Write-Host "  Session activity history is available from Windows Event Logs" -ForegroundColor DarkGray
+            Write-Host "===============================================================" -ForegroundColor DarkCyan
+            Write-Host ""
+            $scChoice = Read-Host " [?] View ScreenConnect session history? (Y/N)"
+            if ($scChoice -eq 'Y' -or $scChoice -eq 'y') {
+                Show-Banner
+                Write-Host "===============================================================" -ForegroundColor DarkCyan
+                Write-Host "  SCREENCONNECT SESSION HISTORY  |  Last 30 Days" -ForegroundColor Yellow
+                Write-Host "===============================================================" -ForegroundColor DarkCyan
+                Write-Host "[*] Querying ScreenConnect event provider..." -ForegroundColor DarkGray
+
+                $scEvents = $null
+                try {
+                    $scEvents = Get-WinEvent -ProviderName "*ScreenConnect*" -ErrorAction Stop |
+                        Where-Object {
+                            -not ($_.Message -like "*SocketException*") -and
+                            $_.Id -ne 20 -and
+                            $_.TimeCreated -ge (Get-Date).AddDays(-30)
+                        } | Sort-Object TimeCreated -Descending
+                } catch {}
+
+                if (-not $scEvents -or $scEvents.Count -eq 0) {
+                    Write-Host "[-] No ScreenConnect event log activity found in the last 30 days." -ForegroundColor Red
+                    Write-Host "    ScreenConnect may not write to Windows Event Log on this endpoint." -ForegroundColor DarkGray
+                    Pause
+                    return
+                }
+
+                Write-Host "[+] Found $($scEvents.Count) event(s)" -ForegroundColor Green
+                Write-Host ""
+
+                # Build paged results
+                $scResults = [System.Collections.Generic.List[PSCustomObject]]::new()
+                foreach ($evt in $scEvents) {
+                    # Clean up message - strip excessive whitespace and blank lines
+                    $cleanMsg = ($evt.Message -split "`n" |
+                        Where-Object { $_.Trim().Length -gt 0 } |
+                        ForEach-Object { $_.Trim() }) -join " | "
+                    if ($cleanMsg.Length -gt 300) { $cleanMsg = $cleanMsg.Substring(0, 300) + "..." }
+
+                    $scResults.Add([PSCustomObject]@{
+                        Type            = "ScreenConnect Event"
+                        User            = "Event ID: $($evt.Id)"
+                        Timestamp       = $evt.TimeCreated.ToString("yyyy-MM-dd HH:mm:ss")
+                        Name            = if ($evt.LevelDisplayName) { $evt.LevelDisplayName } else { "Information" }
+                        Value           = $cleanMsg
+                        SHA1            = "N/A"
+                        SHA256          = "N/A"
+                        RemediationType = "None"
+                        RemediationPath = "N/A"
+                    })
+                }
+                Process-RemediationLoop -items $scResults -title "SCREENCONNECT SESSION HISTORY"
+            }
+        }
     } else {
         Write-Host "`n[+] No known RMM software detected on this endpoint." -ForegroundColor Green
         Pause
