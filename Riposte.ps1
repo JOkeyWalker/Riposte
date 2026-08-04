@@ -760,8 +760,14 @@ function Process-RemediationLoop {
                     }
 
                     if ($item.SHA1 -and $item.SHA1 -ne "N/A") {
-                        Write-Host "       SHA1      : $($item.SHA1)" -ForegroundColor DarkYellow
-                        Write-Host "       SHA256    : $($item.SHA256)" -ForegroundColor DarkYellow
+                        # RMM: ScreenConnect relay info stored in SHA1 field
+                        if ($typeGroup.Name -like "RMM:*" -and $item.SHA1 -notmatch '^[a-f0-9]{40}$') {
+                            Write-Host "       Relay     : " -NoNewline -ForegroundColor White
+                            Write-Host $item.SHA1 -ForegroundColor Cyan
+                        } else {
+                            Write-Host "       SHA1      : $($item.SHA1)" -ForegroundColor DarkYellow
+                            Write-Host "       SHA256    : $($item.SHA256)" -ForegroundColor DarkYellow
+                        }
                     }
                     Write-Host ""
                 }
@@ -2569,13 +2575,35 @@ function Get-RMMHunt {
 
         foreach ($det in $detections) {
             $dateStr = if ($det.InstallDate) { $det.InstallDate } else { "Unknown" }
+
+            # For ScreenConnect detections, attempt to extract relay server from system.config
+            $relayInfo = ""
+            if ($tool.Name -eq "ScreenConnect" -and $det.RemPath) {
+                $configDir = if ($det.RemType -eq "File") { $det.RemPath } else { $null }
+                # Also check common install path if we have a folder-based detection
+                if (-not $configDir -and $det.Detail -match 'C:\\Program Files.*ScreenConnect') {
+                    $configDir = [regex]::Match($det.Detail, 'C:\\Program Files[^|"]*ScreenConnect[^\s|"]*').Value
+                }
+                if ($configDir -and (Test-Path "$configDir\system.config")) {
+                    try {
+                        [xml]$cfg = Get-Content "$configDir\system.config" -Raw -ErrorAction Stop
+                        $rawValue = $cfg.configuration.'ScreenConnect.ApplicationSettings'.setting.value
+                        if ($rawValue -match '\?h=([^&]+)') { $relayHost = $Matches[1] } else { $relayHost = "" }
+                        if ($rawValue -match '[&?]p=([^&]+)')  { $relayPort = $Matches[1] } else { $relayPort = "" }
+                        if ($relayHost) {
+                            $relayInfo = if ($relayPort) { "$relayHost`:$relayPort" } else { $relayHost }
+                        }
+                    } catch {}
+                }
+            }
+
             $results += [PSCustomObject]@{
                 Type            = "RMM: $($tool.Name)"
                 User            = $det.DetectionType
                 Timestamp       = "Installed: $dateStr"
                 Name            = $tool.Name
                 Value           = $det.Detail
-                SHA1            = "N/A"
+                SHA1            = if ($relayInfo) { $relayInfo } else { "N/A" }
                 SHA256          = "N/A"
                 RemediationType = $det.RemType
                 RemediationPath = $det.RemPath
