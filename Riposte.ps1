@@ -2698,8 +2698,11 @@ function Get-RMMHunt {
                     # Split message into clean lines
                     $msgLines = $msg -split "`r?`n" | Where-Object { $_.Trim() -ne "" } | ForEach-Object { $_.Trim() }
 
-                    # First line is the action (e.g. "Administrator Connected")
+                    # First line is the action - also grab second line if present (e.g. filename on next line)
                     $firstLine = if ($msgLines.Count -gt 0) { $msgLines[0].TrimEnd("|").Trim() } else { "-" }
+                    if ($msgLines.Count -gt 1 -and $msgLines[1] -notmatch '^(Version|Executable Path|Relay Server|Instance Fingerprint):') {
+                        $firstLine = "$firstLine $($msgLines[1].Trim())"
+                    }
 
                     # Extract Executable Path and Relay Server from subsequent lines
                     $scExe = "-"
