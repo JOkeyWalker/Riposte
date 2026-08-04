@@ -662,7 +662,8 @@ function Invoke-Remediation {
 function Process-RemediationLoop {
     param(
         [array]$items,
-        [string]$title
+        [string]$title,
+        [bool]$showSCOption = $false
     )
     
     $activeItems = $items
@@ -722,14 +723,23 @@ function Process-RemediationLoop {
                 Write-Host "  ---------------------------------------------------" -ForegroundColor DarkGray
                 
                 foreach ($item in $userGroup.Group) {
-                    if ($typeGroup.Name -eq "History") {
+                    if ($typeGroup.Name -eq "ScreenConnect Event") {
+                        # Parse structured fields - SC:action|EXE:path|RELAY:server
+                        $scParts = @{}
+                        $item.Value -split '\|' | ForEach-Object {
+                            if ($_ -match '^(SC|EXE|RELAY):(.*)$') { $scParts[$Matches[1]] = $Matches[2].Trim() }
+                        }
+                        if ($scParts['SC'])    { Write-Host "       Action    : " -NoNewline -ForegroundColor White;   Write-Host $scParts['SC']    -ForegroundColor Green }
+                        if ($scParts['EXE'])   { Write-Host "       Exe Path  : " -NoNewline -ForegroundColor White;   Write-Host $scParts['EXE']   -ForegroundColor DarkGray }
+                        if ($scParts['RELAY']) { Write-Host "       Relay     : " -NoNewline -ForegroundColor White;   Write-Host $scParts['RELAY'] -ForegroundColor DarkYellow }
+                    } elseif ($typeGroup.Name -eq "History") {
                         Write-Host "   [$($item.MenuIndex)] URL       : $($item.Name)" -ForegroundColor White
                     } else {
                         Write-Host "   [$($item.MenuIndex)] Name      : $($item.Name)" -ForegroundColor White
                         Write-Host "       Timestamp : $($item.Timestamp)" -ForegroundColor DarkGray
                     }
                     
-                    if ($typeGroup.Name -eq "History") {
+                    } elseif ($typeGroup.Name -eq "History") {
                         $histParts   = $item.Value -split "`nURL: "
                         $histBrowser = $histParts[0] -replace "^Browser: ",""
                         $histUrl     = if ($histParts.Count -gt 1) { $histParts[1] } else { $item.Name }
@@ -778,6 +788,9 @@ function Process-RemediationLoop {
         if ($usePaging) {
             Write-Host "  Navigation: [N] Next Page | [P] Previous Page" -ForegroundColor Cyan
         }
+        if ($showSCOption) {
+            Write-Host "  [S]  View ScreenConnect Session History" -ForegroundColor Cyan
+        }
         Write-Host "  Remediation: Enter number(s) (e.g., 1,3,5) | [R] Return to Menu" -ForegroundColor Cyan
         Write-Host "---------------------------------------------------------------" -ForegroundColor DarkCyan
         $remedChoice = Repair-Input (Read-Host " [+] Select Option")
@@ -785,6 +798,11 @@ function Process-RemediationLoop {
         if ($remedChoice -eq 'R' -or $remedChoice -eq 'r' -or -not $remedChoice) {
             $loop = $false
             return # Safe return to caller function
+        }
+
+        if ($showSCOption -and ($remedChoice -eq 'S' -or $remedChoice -eq 's')) {
+            $loop = $false
+            return 'SC_HISTORY'
         }
         
         if ($usePaging -and ($remedChoice -eq 'N' -or $remedChoice -eq 'n')) {
@@ -2628,19 +2646,10 @@ function Get-RMMHunt {
     }
 
     if ($results.Count -gt 0) {
-        Process-RemediationLoop -items $results -title "RMM SOFTWARE HUNT RESULTS"
-
-        # Check if ScreenConnect was found - offer session history pivot
         $scFound = $results | Where-Object { $_.Type -like "RMM: ScreenConnect*" } | Select-Object -First 1
-        if ($scFound) {
-            Show-Banner
-            Write-Host "===============================================================" -ForegroundColor DarkCyan
-            Write-Host "  SCREENCONNECT DETECTED" -ForegroundColor Yellow
-            Write-Host "  Session activity history is available from Windows Event Logs" -ForegroundColor DarkGray
-            Write-Host "===============================================================" -ForegroundColor DarkCyan
-            Write-Host ""
-            $scChoice = Read-Host " [?] View ScreenConnect session history? (Y/N)"
-            if ($scChoice -eq 'Y' -or $scChoice -eq 'y') {
+        $loopResult = Process-RemediationLoop -items $results -title "RMM SOFTWARE HUNT RESULTS" -showSCOption ($scFound -ne $null)
+
+        if ($loopResult -eq 'SC_HISTORY') {
                 Show-Banner
                 Write-Host "===============================================================" -ForegroundColor DarkCyan
                 Write-Host "  SCREENCONNECT SESSION HISTORY  |  Last 30 Days" -ForegroundColor Yellow
@@ -2667,21 +2676,31 @@ function Get-RMMHunt {
                 Write-Host "[+] Found $($scEvents.Count) event(s)" -ForegroundColor Green
                 Write-Host ""
 
-                # Build paged results
                 $scResults = [System.Collections.Generic.List[PSCustomObject]]::new()
                 foreach ($evt in $scEvents) {
-                    # Clean up message - strip excessive whitespace and blank lines
-                    $cleanMsg = ($evt.Message -split "`n" |
-                        Where-Object { $_.Trim().Length -gt 0 } |
-                        ForEach-Object { $_.Trim() }) -join " | "
-                    if ($cleanMsg.Length -gt 300) { $cleanMsg = $cleanMsg.Substring(0, 300) + "..." }
+                    $msg = $evt.Message
+
+                    # Extract structured fields from ScreenConnect event message
+                    $scUser    = if ($msg -match '^([^\(]+\([^\)]+\))') { $Matches[1].Trim() } else { "-" }
+                    $scExe     = if ($msg -match 'Executable Path:\s*([^\|]+)') { $Matches[1].Trim() } else { "-" }
+                    $scRelay   = if ($msg -match 'Relay Server:\s*(relay://[^\|]+|https?://[^\|]+)') { $Matches[1].Trim().TrimEnd('/') } else { "-" }
+                    # Action is everything before the first field separator
+                    $scAction  = if ($msg -match '^[^\r\n]+') {
+                        $first = $Matches[0].Trim()
+                        # Strip the user portion and version from the action line
+                        $first = $first -replace '^\S.*?\(\d+\)\s*', '' -replace '\|\s*Version:[^|]+', '' -replace '^\s*\|\s*', ''
+                        $first.Trim().TrimEnd('|').Trim()
+                    } else { "-" }
+
+                    # Build clean display value
+                    $displayValue = "SC:$scAction|EXE:$scExe|RELAY:$scRelay"
 
                     $scResults.Add([PSCustomObject]@{
                         Type            = "ScreenConnect Event"
                         User            = "Event ID: $($evt.Id)"
                         Timestamp       = $evt.TimeCreated.ToString("yyyy-MM-dd HH:mm:ss")
-                        Name            = if ($evt.LevelDisplayName) { $evt.LevelDisplayName } else { "Information" }
-                        Value           = $cleanMsg
+                        Name            = $scUser
+                        Value           = $displayValue
                         SHA1            = "N/A"
                         SHA256          = "N/A"
                         RemediationType = "None"
@@ -2689,7 +2708,6 @@ function Get-RMMHunt {
                     })
                 }
                 Process-RemediationLoop -items $scResults -title "SCREENCONNECT SESSION HISTORY"
-            }
         }
     } else {
         Write-Host "`n[+] No known RMM software detected on this endpoint." -ForegroundColor Green
