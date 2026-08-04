@@ -663,7 +663,7 @@ function Process-RemediationLoop {
     param(
         [array]$items,
         [string]$title,
-        [bool]$showSCOption = $false
+        [switch]$showSCOption
     )
     
     $activeItems = $items
@@ -2647,7 +2647,9 @@ function Get-RMMHunt {
 
     if ($results.Count -gt 0) {
         $scFound = $results | Where-Object { $_.Type -like "RMM: ScreenConnect*" } | Select-Object -First 1
-        $loopResult = Process-RemediationLoop -items $results -title "RMM SOFTWARE HUNT RESULTS" -showSCOption ($scFound -ne $null)
+        $loopParams = @{ items = $results; title = "RMM SOFTWARE HUNT RESULTS" }
+        if ($scFound) { $loopParams['showSCOption'] = $true }
+        $loopResult = Process-RemediationLoop @loopParams
 
         if ($loopResult -eq 'SC_HISTORY') {
                 Show-Banner
