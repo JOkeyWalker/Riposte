@@ -2518,7 +2518,7 @@ function Get-RMMHunt {
                 $installDate = Get-InstallDateFromPath -p $svcExePath
                 $detections += [PSCustomObject]@{
                     DetectionType = "Service"
-                    Detail        = "$($svc.DisplayName) [$($svc.Name)] | Status: $($svc.Status)"
+                    Detail        = "Service: $($svc.Name) | Status: $($svc.Status)"
                     RemType       = "Service"
                     RemPath       = $svc.Name
                     InstallDate   = $installDate
@@ -2548,7 +2548,8 @@ function Get-RMMHunt {
                         }
                         $detections += [PSCustomObject]@{
                             DetectionType = "Installed (Registry)"
-                            Detail        = "$displayName | Location: $installLoc"
+                            $locPart = if ($installLoc) { " | Location: $installLoc" } else { "" }
+                            Detail        = "$displayName$locPart"
                             RemType       = "Registry"
                             RemPath       = $key.PSPath
                             InstallDate   = $installDate
@@ -2578,11 +2579,26 @@ function Get-RMMHunt {
 
             # For ScreenConnect detections, attempt to extract relay server from system.config
             $relayInfo = ""
-            if ($tool.Name -eq "ScreenConnect" -and $det.RemPath) {
-                $configDir = if ($det.RemType -eq "File") { $det.RemPath } else { $null }
-                # Also check common install path if we have a folder-based detection
-                if (-not $configDir -and $det.Detail -match 'C:\\Program Files.*ScreenConnect') {
-                    $configDir = [regex]::Match($det.Detail, 'C:\\Program Files[^|"]*ScreenConnect[^\s|"]*').Value
+            if ($tool.Name -eq "ScreenConnect") {
+                $configDir = $null
+                # Try all available path hints to locate the install folder
+                $pathHints = @($det.Detail, $det.RemPath)
+                foreach ($hint in $pathHints) {
+                    if (-not $hint) { continue }
+                    # Extract a ScreenConnect folder path from the hint
+                    $m = [regex]::Match($hint, '(C:\\Program Files[^|"\r\n]*ScreenConnect Client[^\\|"\r\n]*)')
+                    if ($m.Success) {
+                        $candidate = $m.Groups[1].Value.TrimEnd('\\ ','/')
+                        # Strip filename if present
+                        if ($candidate -match '\.exe$|\.dll$') { $candidate = Split-Path $candidate -Parent }
+                        if (Test-Path "$candidate\system.config") { $configDir = $candidate; break }
+                    }
+                }
+                # Also scan Program Files directly as final fallback
+                if (-not $configDir) {
+                    $found = Get-ChildItem "C:\Program Files (x86)" -Directory -ErrorAction SilentlyContinue |
+                        Where-Object { $_.Name -like "ScreenConnect Client*" } | Select-Object -First 1
+                    if ($found -and (Test-Path "$($found.FullName)\system.config")) { $configDir = $found.FullName }
                 }
                 if ($configDir -and (Test-Path "$configDir\system.config")) {
                     try {
