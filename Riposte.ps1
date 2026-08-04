@@ -763,7 +763,7 @@ function Process-RemediationLoop {
                         # RMM: ScreenConnect relay info stored in SHA1 field
                         if ($typeGroup.Name -like "RMM:*" -and $item.SHA1 -notmatch '^[a-f0-9]{40}$') {
                             Write-Host "       Relay     : " -NoNewline -ForegroundColor White
-                            Write-Host $item.SHA1 -ForegroundColor Cyan
+                            Write-Host $item.SHA1 -ForegroundColor DarkYellow
                         } else {
                             Write-Host "       SHA1      : $($item.SHA1)" -ForegroundColor DarkYellow
                             Write-Host "       SHA256    : $($item.SHA256)" -ForegroundColor DarkYellow
