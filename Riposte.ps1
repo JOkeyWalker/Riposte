@@ -3206,8 +3206,8 @@ namespace BH {
         chromium = [datetime]::SpecifyKind([datetime]::new(1601,1,1),[System.DateTimeKind]::Utc)
         firefox  = [datetime]::SpecifyKind([datetime]::new(1970,1,1),[System.DateTimeKind]::Utc)
     }
-    $CORE = @{0='Link';1='Typed';2='AutoBookmark';4='ManualSubframe';5='Generated';7='FormSubmit';8='Reload'}
-    $DLSTATE = @{0='InProgress';1='Complete';2='Cancelled';3='Interrupted';4='Interrupted'}
+    $CORE = @{'0'='Link';'1'='Typed';'2'='AutoBookmark';'4'='ManualSubframe';'5'='Generated';'7'='FormSubmit';'8'='Reload'}
+    $DLSTATE = @{'0'='InProgress';'1'='Complete';'2'='Cancelled';'3'='Interrupted';'4'='Interrupted'}
 
     $sUtc = $parsedTime.StartTime.ToUniversalTime()
     $eUtc = $parsedTime.EndTime.ToUniversalTime()
@@ -3285,7 +3285,8 @@ namespace BH {
                         $hits = [BH.Sqlite3]::Query($copy, $hSql)
                         foreach ($r in $hits) {
                             $t = $EPOCH[$fam].AddTicks([int64]$r[0] * 10).ToLocalTime()
-                            $core = if ($CORE.ContainsKey([int]$r[5])) { $CORE[[int]$r[5]] } else { "Type$($r[5])" }
+                            $coreKey = "$([int]$r[5])"
+                            $core = if ($CORE.ContainsKey($coreKey)) { $CORE[$coreKey] } else { "Type$coreKey" }
                             $rows.Add([PSCustomObject]@{
                                 Time       = $t
                                 User       = $user.Name
@@ -3312,7 +3313,7 @@ namespace BH {
                                         Kind       = 'DOWNLOAD'
                                         Name       = [string]$d[6]
                                         URL        = [string]$d[1]
-                                        Transition = $DLSTATE[[int]$d[4]]
+                                        Transition = if ($DLSTATE.ContainsKey("$([int]$d[4])")) { $DLSTATE["$([int]$d[4])"] } else { "Unknown" }
                                         Duration   = $null
                                         Visits     = $null
                                         Bytes      = [int64]$d[2]
