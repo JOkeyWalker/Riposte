@@ -3336,6 +3336,16 @@ namespace BH {
         $out = @($out | Where-Object { $_.URL -match [regex]::Escape($urlFilter) })
     }
 
+    # Filter Bing click-redirect tracking URLs (bing.com/ck/a?! - not the actual destination)
+    $out = @($out | Where-Object { $_.URL -notmatch 'bing\.com/ck/a\?!' })
+
+    # Deduplicate: same URL + same timestamp (to second) + same user = same visit logged multiple times
+    $seenKeys = [System.Collections.Generic.HashSet[string]]::new()
+    $out = @($out | Where-Object {
+        $key = "$($_.User)|$($_.URL)|$($_.Time.ToString('yyyy-MM-dd HH:mm:ss'))"
+        $seenKeys.Add($key)
+    })
+
     if ($out.Count -eq 0) {
         Write-Host "[-] No browser history found in the selected timeframe." -ForegroundColor Red
         Pause
@@ -3348,7 +3358,7 @@ namespace BH {
         $valueStr = if ($e.Kind -eq 'DOWNLOAD') {
             "DOWNLOAD:$($e.Transition)|FILE:$($e.URL)|SIZE:$(if($e.Bytes){"$([math]::Round($e.Bytes/1MB,2)) MB"}else{"Unknown"})"
         } else {
-            "VISIT:$($e.Transition)|DUR:$($e.Duration)s|COUNT:$($e.Visits)|URL:$($e.URL)"
+            "VISIT:$($e.Transition)|DUR:$($e.Duration)|COUNT:$($e.Visits)|URL:$($e.URL)"
         }
         $results.Add([PSCustomObject]@{
             Type            = "Browser History"
