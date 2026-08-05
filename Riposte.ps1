@@ -3339,10 +3339,13 @@ namespace BH {
     # Filter Bing click-redirect tracking URLs (bing.com/ck/a?! - not the actual destination)
     $out = @($out | Where-Object { $_.URL -notmatch 'bing\.com/ck/a\?!' })
 
-    # Deduplicate: same URL + same timestamp (to second) + same user = same visit logged multiple times
+    # Deduplicate: normalize URL by stripping tracking params, then dedup by user+normalURL+timestamp
     $seenKeys = [System.Collections.Generic.HashSet[string]]::new()
     $out = @($out | Where-Object {
-        $key = "$($_.User)|$($_.URL)|$($_.Time.ToString('yyyy-MM-dd HH:mm:ss'))"
+        # Strip common tracking/session params before comparing
+        $normUrl = $_.URL -replace '[?&](sei|sca_esv|udm|fbs|gs_lcrp|gs_lp|sourceid|source|ved|uact|sclient|oq|aq|aqi|aql|gs_l|pbx|bav|bih|biw|ei|emsg|noj|num|prmd|prmdo|rlz|sa|sout|spell|tbo|tbs|ved|cvid|gs_lcrp|pglt|sk|sc|pq|qs|FORM|PC|sp|lq|ntref|ajf)=[^&]*', ''
+        $normUrl = $normUrl.TrimEnd('?&')
+        $key = "$($_.User)|$normUrl|$($_.Time.ToString('yyyy-MM-dd HH:mm:ss'))"
         $seenKeys.Add($key)
     })
 
