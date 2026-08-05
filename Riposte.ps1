@@ -3464,6 +3464,12 @@ while ($true) {
     }
     if ($quit -eq 'destruct') {
         $scriptPath  = $MyInvocation.MyCommand.Path
+        if (-not $scriptPath) { $scriptPath = $PSCommandPath }
+        if (-not $scriptPath) {
+            Write-Host "[-] Cannot determine script path. Deletion not possible in this shell context." -ForegroundColor Red
+            Write-Host "[+] Shell session preserved." -ForegroundColor Green
+            break
+        }
         $parentDir   = Split-Path $scriptPath -Parent
         $parentName  = Split-Path $parentDir -Leaf
 
@@ -3490,17 +3496,19 @@ while ($true) {
         }
 
         if ($parentName -eq 'Riposte') {
-            # Schedule folder deletion via cmd.exe after PowerShell exits
-            # This bypasses the lock PowerShell holds on its own working directory
-            # Move off the folder using the drive root, not hardcoded C:\
+            # Move off the folder and release any handles before scheduling deletion
             $driveRoot = Split-Path -Qualifier $parentDir
             Set-Location "$driveRoot\" -ErrorAction SilentlyContinue
+            # Force garbage collection to release file handles
+            [GC]::Collect()
+            [GC]::WaitForPendingFinalizers()
+            [GC]::Collect()
             try {
-                # Use cmd /c rd to delete after a short delay, runs detached from this process
-                $rdCmd = "timeout /t 2 /nobreak >nul & rd /s /q `"$parentDir`""
+                # 5 second delay gives PowerShell time to fully exit and release handles
+                $rdCmd = "timeout /t 5 /nobreak >nul & rd /s /q `"$parentDir`" & if exist `"$parentDir`" (timeout /t 3 /nobreak >nul & rd /s /q `"$parentDir`")"
                 Start-Process -FilePath "cmd.exe" -ArgumentList "/c $rdCmd" -WindowStyle Hidden
                 Write-Host "[+] Riposte folder queued for deletion: $parentDir" -ForegroundColor Green
-                Write-Host "    (Deletion completes in ~2 seconds after shell returns)" -ForegroundColor DarkGray
+                Write-Host "    (Deletion completes ~5 seconds after shell returns)" -ForegroundColor DarkGray
             } catch {
                 Write-Host "[-] Failed to queue folder deletion: $_" -ForegroundColor Red
             }
