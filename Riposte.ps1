@@ -765,6 +765,23 @@ function Process-RemediationLoop {
                                 Write-Host "       $seg" -ForegroundColor Green
                             }
                         }
+                    } elseif ($typeGroup.Name -eq "Browser History") {
+                        $parts = @{}
+                        $item.Value -split '\|' | ForEach-Object {
+                            if ($_ -match '^([^:]+):(.*)$') { $parts[$Matches[1]] = $Matches[2].Trim() }
+                        }
+                        $isDownload = $item.Name -like "DOWNLOAD:*"
+                        Write-Host "       Browser   : " -NoNewline -ForegroundColor White
+                        Write-Host $item.Browser -ForegroundColor DarkGray
+                        if ($isDownload) {
+                            Write-Host "       State     : " -NoNewline -ForegroundColor White;  Write-Host $parts['DOWNLOAD'] -ForegroundColor Green
+                            Write-Host "       File      : " -NoNewline -ForegroundColor White;  Write-Host $parts['FILE']     -ForegroundColor Cyan
+                            Write-Host "       Size      : " -NoNewline -ForegroundColor White;  Write-Host $parts['SIZE']     -ForegroundColor DarkGray
+                        } else {
+                            Write-Host "       URL       : " -NoNewline -ForegroundColor White;  Write-Host $parts['URL']      -ForegroundColor Cyan
+                            Write-Host "       Source    : " -NoNewline -ForegroundColor White;  Write-Host $parts['VISIT']    -ForegroundColor DarkGray
+                            Write-Host "       Duration  : " -NoNewline -ForegroundColor White;  Write-Host "$($parts['DUR'])s  |  Visits: $($parts['COUNT'])" -ForegroundColor DarkGray
+                        }
                     } elseif ($typeGroup.Name -eq "Extension") {
                         Write-Host "       $($item.Value)" -ForegroundColor Green
                     } elseif ($typeGroup.Name -match "Scheduled Task|Service|Process|WMI|RunMRU") {
@@ -3111,6 +3128,230 @@ function Get-BrowserNotifications {
 }
 
 
+function Invoke-BrowserHistory {
+    Show-Banner
+    Write-Host "===============================================================" -ForegroundColor DarkCyan
+    Write-Host "  BROWSER HISTORY" -ForegroundColor Yellow
+    Write-Host "  Chrome, Edge, Brave, Firefox  |  Requires Windows 10 1709+" -ForegroundColor DarkGray
+    Write-Host "===============================================================" -ForegroundColor DarkCyan
+    Write-Host ""
+
+    # Check winsqlite3.dll availability
+    if (-not (Test-Path "$env:SystemRoot\System32\winsqlite3.dll")) {
+        Write-Host "[-] winsqlite3.dll not found. Windows 10 1709+ required." -ForegroundColor Red
+        Pause
+        return
+    }
+
+    Write-Host "  Timeframe examples: 30m, 1h, 6h, 1d, 7d" -ForegroundColor DarkGray
+    $timeInput = Repair-Input (Read-Host " [?] Enter history timeframe (or Q to cancel)")
+    if ($timeInput -eq "Q" -or $timeInput -eq "q") { return }
+    if (-not $timeInput) { $timeInput = "24h" }
+
+    $parsedTime = Parse-Timeframe -inputString $timeInput
+    if (-not $parsedTime -or -not $parsedTime.StartTime) {
+        Write-Host "[-] Invalid timeframe. Defaulting to last 24 hours." -ForegroundColor Yellow
+        $parsedTime = @{ StartTime = (Get-Date).AddHours(-24); EndTime = Get-Date }
+    }
+
+    Write-Host ""
+    Write-Host "  Filter by URL/domain keyword (leave blank for all)" -ForegroundColor DarkGray
+    $urlFilter = Repair-Input (Read-Host " [?] URL filter (or ENTER to skip)")
+
+    Write-Host ""
+    Write-Host "[*] Scanning browser history..." -ForegroundColor Yellow
+    Write-Host "    Range: $($parsedTime.StartTime.ToString('yyyy-MM-dd HH:mm:ss')) to $($parsedTime.EndTime.ToString('yyyy-MM-dd HH:mm:ss'))" -ForegroundColor DarkGray
+
+    # Compile winsqlite3 interop if not already loaded
+    if (-not ('BH.Sqlite3' -as [type])) {
+        Write-Host "[*] Initialising SQLite driver..." -ForegroundColor DarkGray
+        try {
+            Add-Type -Language CSharp -TypeDefinition @'
+using System; using System.Runtime.InteropServices; using System.Collections.Generic;
+namespace BH {
+ public static class Sqlite3 {
+  [DllImport("winsqlite3.dll",EntryPoint="sqlite3_open16",CharSet=CharSet.Unicode)] static extern int Op(string f,out IntPtr d);
+  [DllImport("winsqlite3.dll",EntryPoint="sqlite3_prepare16_v2",CharSet=CharSet.Unicode)] static extern int Pr(IntPtr d,string s,int n,out IntPtr st,IntPtr t);
+  [DllImport("winsqlite3.dll",EntryPoint="sqlite3_step")] static extern int Sp(IntPtr s);
+  [DllImport("winsqlite3.dll",EntryPoint="sqlite3_column_type")] static extern int Ty(IntPtr s,int i);
+  [DllImport("winsqlite3.dll",EntryPoint="sqlite3_column_text16")] static extern IntPtr Tx(IntPtr s,int i);
+  [DllImport("winsqlite3.dll",EntryPoint="sqlite3_column_int64")] static extern long I6(IntPtr s,int i);
+  [DllImport("winsqlite3.dll",EntryPoint="sqlite3_column_count")] static extern int Ct(IntPtr s);
+  [DllImport("winsqlite3.dll",EntryPoint="sqlite3_errmsg16")] static extern IntPtr Er(IntPtr d);
+  [DllImport("winsqlite3.dll",EntryPoint="sqlite3_finalize")] static extern int Fi(IntPtr s);
+  [DllImport("winsqlite3.dll",EntryPoint="sqlite3_close")] static extern int Cl(IntPtr d);
+  public static List<object[]> Query(string file,string sql){
+   var rows=new List<object[]>(); IntPtr d=IntPtr.Zero, st=IntPtr.Zero;
+   if(Op(file,out d)!=0){ string e=Marshal.PtrToStringUni(Er(d)); Cl(d); throw new Exception("open: "+e); }
+   try {
+     if(Pr(d,sql,-1,out st,IntPtr.Zero)!=0) throw new Exception("prepare: "+Marshal.PtrToStringUni(Er(d)));
+     int c=Ct(st);
+     while(Sp(st)==100){ var r=new object[c];
+       for(int i=0;i<c;i++) r[i]=(Ty(st,i)==1)?(object)I6(st,i):(Tx(st,i)==IntPtr.Zero?"":Marshal.PtrToStringUni(Tx(st,i)));
+       rows.Add(r); }
+   } finally { if(st!=IntPtr.Zero) Fi(st); Cl(d); }
+   return rows;
+  }
+ }
+}
+'@
+        } catch {
+            Write-Host "[-] Failed to compile SQLite driver: $_" -ForegroundColor Red
+            Pause
+            return
+        }
+    }
+
+    $EPOCH = @{
+        chromium = [datetime]::SpecifyKind([datetime]::new(1601,1,1),[System.DateTimeKind]::Utc)
+        firefox  = [datetime]::SpecifyKind([datetime]::new(1970,1,1),[System.DateTimeKind]::Utc)
+    }
+    $CORE = @{0='Link';1='Typed';2='AutoBookmark';4='ManualSubframe';5='Generated';7='FormSubmit';8='Reload'}
+    $DLSTATE = @{0='InProgress';1='Complete';2='Cancelled';3='Interrupted';4='Interrupted'}
+
+    $sUtc = $parsedTime.StartTime.ToUniversalTime()
+    $eUtc = $parsedTime.EndTime.ToUniversalTime()
+    $bound = @{}
+    foreach ($k in $EPOCH.Keys) {
+        $bound[$k] = @(
+            [int64]((($sUtc - $EPOCH[$k]).Ticks) / 10),
+            [int64]((($eUtc - $EPOCH[$k]).Ticks) / 10)
+        )
+    }
+
+    $browsers = @(
+        @{ Name='Chrome';  Family='chromium'; Path='AppData\Local\Google\Chrome\User Data' }
+        @{ Name='Edge';    Family='chromium'; Path='AppData\Local\Microsoft\Edge\User Data' }
+        @{ Name='Brave';   Family='chromium'; Path='AppData\Local\BraveSoftware\Brave-Browser\User Data' }
+        @{ Name='Firefox'; Family='firefox';  Path='AppData\Roaming\Mozilla\Firefox\Profiles' }
+    )
+    $dbName = @{ chromium='History'; firefox='places.sqlite' }
+    $qHist = @{
+        chromium = "SELECT v.visit_time,u.url,u.title,u.visit_count,v.visit_duration,v.transition & 255 FROM visits v JOIN urls u ON u.id=v.url WHERE v.visit_time BETWEEN {0} AND {1} ORDER BY v.visit_time;"
+        firefox  = "SELECT h.visit_date,p.url,p.title,p.visit_count,0,h.visit_type FROM moz_historyvisits h JOIN moz_places p ON p.id=h.place_id WHERE h.visit_date BETWEEN {0} AND {1} ORDER BY h.visit_date;"
+    }
+    $qDown = "SELECT start_time,target_path,received_bytes,total_bytes,state,tab_url,mime_type FROM downloads WHERE start_time BETWEEN {0} AND {1} ORDER BY start_time;"
+
+    $work = Join-Path $env:TEMP ("bh_" + [guid]::NewGuid().ToString("N"))
+    New-Item -ItemType Directory -Path $work -Force -ErrorAction SilentlyContinue | Out-Null
+
+    $rows = [System.Collections.Generic.List[PSCustomObject]]::new()
+
+    try {
+        $users = Get-ChildItem "C:\Users" -Directory -ErrorAction SilentlyContinue |
+            Where-Object { $_.Name -notmatch '^(Public|Default|Default User|All Users|TEMP|systemprofile|LocalService|NetworkService)$' }
+
+        foreach ($user in $users) {
+            foreach ($b in $browsers) {
+                $root = Join-Path $user.FullName $b.Path
+                if (-not (Test-Path $root -ErrorAction SilentlyContinue)) { continue }
+                Write-Host "[*] Scanning $($user.Name)\$($b.Name)..." -ForegroundColor DarkGray
+
+                $fam = $b.Family
+                $hSql = $qHist[$fam] -f $bound[$fam][0], $bound[$fam][1]
+
+                Get-ChildItem $root -Recurse -Depth 1 -Filter $dbName[$fam] -File -ErrorAction SilentlyContinue | ForEach-Object {
+                    $dbFile = $_
+                    $prof = if ($dbFile.Directory.FullName -eq $root) { 'Default' } else { $dbFile.Directory.Name }
+                    $copy = Join-Path $work ([guid]::NewGuid().ToString("N"))
+
+                    try {
+                        # Copy DB + WAL/SHM sidecar files
+                        foreach ($ext in @('','-wal','-shm')) {
+                            $src = $dbFile.FullName + $ext
+                            if (Test-Path $src -ErrorAction SilentlyContinue) {
+                                try {
+                                    $fs = [IO.File]::Open($src,'Open','Read','ReadWrite')
+                                    try { $bytes = [byte[]]::new($fs.Length); [void]$fs.Read($bytes,0,$bytes.Length) }
+                                    finally { $fs.Close() }
+                                    [IO.File]::WriteAllBytes($copy+$ext, $bytes)
+                                } catch { if ($ext -eq '') { throw } }
+                            }
+                        }
+
+                        $hits = [BH.Sqlite3]::Query($copy, $hSql)
+                        foreach ($r in $hits) {
+                            $t = $EPOCH[$fam].AddTicks([int64]$r[0] * 10).ToLocalTime()
+                            $core = if ($CORE.ContainsKey([int]$r[5])) { $CORE[[int]$r[5]] } else { "Type$($r[5])" }
+                            $rows.Add([PSCustomObject]@{
+                                Time       = $t
+                                User       = $user.Name
+                                Browser    = "$($b.Name)\$prof"
+                                Kind       = 'Visit'
+                                Name       = if ($r[2]) { [string]$r[2] } else { [string]$r[1] }
+                                URL        = [string]$r[1]
+                                Transition = $core
+                                Duration   = [math]::Round(([int64]$r[4])/1e6,1)
+                                Visits     = [int64]$r[3]
+                                Bytes      = $null
+                            })
+                        }
+
+                        # Downloads (Chromium only)
+                        if ($fam -eq 'chromium') {
+                            try {
+                                $dSql = $qDown -f $bound[$fam][0], $bound[$fam][1]
+                                foreach ($d in [BH.Sqlite3]::Query($copy, $dSql)) {
+                                    $rows.Add([PSCustomObject]@{
+                                        Time       = $EPOCH[$fam].AddTicks([int64]$d[0]*10).ToLocalTime()
+                                        User       = $user.Name
+                                        Browser    = "$($b.Name)\$prof"
+                                        Kind       = 'DOWNLOAD'
+                                        Name       = [string]$d[6]
+                                        URL        = [string]$d[1]
+                                        Transition = $DLSTATE[[int]$d[4]]
+                                        Duration   = $null
+                                        Visits     = $null
+                                        Bytes      = [int64]$d[2]
+                                    })
+                                }
+                            } catch {}
+                        }
+                    } catch { Write-Host "    [-] Failed: $($_.Exception.Message)" -ForegroundColor Red }
+                }
+            }
+        }
+    } finally {
+        Remove-Item $work -Recurse -Force -ErrorAction SilentlyContinue
+    }
+
+    $out = @($rows | Sort-Object Time -Descending)
+    if ($urlFilter) {
+        $out = @($out | Where-Object { $_.URL -match [regex]::Escape($urlFilter) })
+    }
+
+    if ($out.Count -eq 0) {
+        Write-Host "[-] No browser history found in the selected timeframe." -ForegroundColor Red
+        Pause
+        return
+    }
+
+    # Build results for Process-RemediationLoop
+    $results = [System.Collections.Generic.List[PSCustomObject]]::new()
+    foreach ($e in $out) {
+        $valueStr = if ($e.Kind -eq 'DOWNLOAD') {
+            "DOWNLOAD:$($e.Transition)|FILE:$($e.URL)|SIZE:$(if($e.Bytes){"$([math]::Round($e.Bytes/1MB,2)) MB"}else{"Unknown"})"
+        } else {
+            "VISIT:$($e.Transition)|DUR:$($e.Duration)s|COUNT:$($e.Visits)|URL:$($e.URL)"
+        }
+        $results.Add([PSCustomObject]@{
+            Type            = "Browser History"
+            User            = $e.User
+            Timestamp       = $e.Time.ToString("yyyy-MM-dd HH:mm:ss")
+            Name            = "$($e.Kind): $($e.Name)"
+            Value           = $valueStr
+            SHA1            = "N/A"
+            SHA256          = "N/A"
+            RemediationType = "None"
+            RemediationPath = "N/A"
+            Browser         = $e.Browser
+        })
+    }
+
+    Process-RemediationLoop -items $results -title "BROWSER HISTORY$(if($urlFilter){" | Filter: $urlFilter"})" -noRemediation
+}
+
+
 function Get-BrowserForensics {
     Show-Banner
     Write-Host "===============================================================" -ForegroundColor DarkCyan
@@ -3122,11 +3363,13 @@ function Get-BrowserForensics {
     Write-Host "       Name, version, source, permissions, install date" -ForegroundColor DarkGray
     Write-Host "  [" -NoNewline -ForegroundColor White; Write-Host "2" -NoNewline -ForegroundColor Cyan; Write-Host "]  Notification Permissions" -ForegroundColor White
     Write-Host "       Detect and remove scareware/spam notification origins" -ForegroundColor DarkGray
+    Write-Host "  [" -NoNewline -ForegroundColor White; Write-Host "3" -NoNewline -ForegroundColor Cyan; Write-Host "]  Browser History" -ForegroundColor White
+    Write-Host "       URLs, downloads, timestamps across Chrome, Edge, Brave, Firefox" -ForegroundColor DarkGray
     Write-Host ""
 
-    $subChoice = Read-Host " [?] Select an option (or Q to cancel)"
+    $subChoice = Repair-Input (Read-Host " [?] Select an option (or Q to cancel)")
     if ($subChoice -eq 'Q' -or $subChoice -eq 'q') { return }
-    if ($subChoice -notin @('1','2')) {
+    if ($subChoice -notin @('1','2','3')) {
         Write-Host "[-] Invalid selection." -ForegroundColor Red
         Start-Sleep -Seconds 1
         return
@@ -3134,6 +3377,11 @@ function Get-BrowserForensics {
 
     if ($subChoice -eq '2') {
         Get-BrowserNotifications
+        return
+    }
+
+    if ($subChoice -eq '3') {
+        Invoke-BrowserHistory
         return
     }
 
