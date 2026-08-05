@@ -3504,11 +3504,14 @@ while ($true) {
             [GC]::WaitForPendingFinalizers()
             [GC]::Collect()
             try {
-                # 5 second delay gives PowerShell time to fully exit and release handles
-                $rdCmd = "timeout /t 5 /nobreak >nul & rd /s /q `"$parentDir`" & if exist `"$parentDir`" (timeout /t 3 /nobreak >nul & rd /s /q `"$parentDir`")"
+                # Get the parent PowerShell process (the one that launched this script)
+                # It holds the CWD lock on the Riposte folder
+                $parentPID = (Get-CimInstance Win32_Process -Filter "ProcessId=$PID" -ErrorAction SilentlyContinue).ParentProcessId
+                # Schedule: wait 2s, delete folder, then kill the parent PS process
+                $rdCmd = "timeout /t 2 /nobreak >nul & rd /s /q `"$parentDir`" & if exist `"$parentDir`" (timeout /t 2 /nobreak >nul & taskkill /F /PID $parentPID >nul 2>&1 & timeout /t 1 /nobreak >nul & rd /s /q `"$parentDir`")"
                 Start-Process -FilePath "cmd.exe" -ArgumentList "/c $rdCmd" -WindowStyle Hidden
                 Write-Host "[+] Riposte folder queued for deletion: $parentDir" -ForegroundColor Green
-                Write-Host "    (Deletion completes ~5 seconds after shell returns)" -ForegroundColor DarkGray
+                Write-Host "    (Deletion completes ~2 seconds after shell returns)" -ForegroundColor DarkGray
             } catch {
                 Write-Host "[-] Failed to queue folder deletion: $_" -ForegroundColor Red
             }
