@@ -2254,7 +2254,9 @@ function Get-RecentlyWrittenFiles {
         "*.exe", "*.dll", "*.bat", "*.ps1", "*.vbs", "*.js", "*.msi", "*.hta", "*.scr", "*.cmd", "*.wsf",
         "*.zip", "*.rar", "*.7z", "*.iso",
         # Common lure file types attackers use to disguise payloads
-        "*.pdf", "*.docx", "*.xlsx", "*.png", "*.jpg", "*.jpeg"
+        "*.pdf", "*.docx", "*.xlsx", "*.png", "*.jpg", "*.jpeg",
+        # Custom container/staging extensions seen in advanced campaigns
+        "*.man"
     )
     # Extensions to flag as noise even if found (shortcuts - log separately)
     $noisyExtensions = @(".lnk", ".url")
@@ -2866,8 +2868,8 @@ function Get-RMMHunt {
 
                     $scResults.Add([PSCustomObject]@{
                         Type            = "ScreenConnect Event"
-                        User            = "Event ID: $($evt.Id)"
-                        Timestamp       = $evt.TimeCreated.ToString("yyyy-MM-dd HH:mm:ss")
+                        User            = "Session Activity"
+                        Timestamp       = "$($evt.TimeCreated.ToString('yyyy-MM-dd HH:mm:ss'))  [ID $($evt.Id)]"
                         Name            = $firstLine
                         Value           = $displayValue
                         SHA1            = "N/A"
