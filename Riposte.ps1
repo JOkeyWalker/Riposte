@@ -3295,7 +3295,9 @@ namespace BH {
                                 User       = $user.Name
                                 Browser    = "$($b.Name)\$prof"
                                 Kind       = 'Visit'
-                                Name       = if ($r[2]) { [string]$r[2] } else { [string]$r[1] }
+                                Name       = if ($r[2]) { [string]$r[2] } else {
+                                                try { $uri = [uri]([string]$r[1]); "$($uri.Host)$($uri.AbsolutePath)".TrimEnd('/') } catch { [string]$r[1] }
+                                             }
                                 URL        = [string]$r[1]
                                 Transition = $core
                                 Duration   = [math]::Round(([int64]$r[4])/1e6,1)
