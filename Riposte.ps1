@@ -2802,6 +2802,35 @@ function Get-RMMHunt {
                     if ($signerSubject -match [regex]::Escape($sigStr)) { $matched = $true; break }
                 }
                 if ($matched) {
+                    # Only flag if the binary is NOT in the expected install path for this vendor
+                    # A signed Splashtop exe in C:\Program Files\Splashtop\ is legitimate
+                    $expectedPaths = $rmmTools | Where-Object { $_.Name -like "*$vendor*" } |
+                        ForEach-Object { $_.Paths } | ForEach-Object { $_ }
+                    $inExpectedPath = $false
+                    foreach ($ep in $expectedPaths) {
+                        $expandedEp = [System.Environment]::ExpandEnvironmentVariables($ep)
+                        if ($exePath -like "$expandedEp*") { $inExpectedPath = $true; break }
+                    }
+                    # Check Program Files broadly for vendor name and known aliases
+                    $vendorAliases = @{
+                        'ConnectWise' = @('connectwise','itsplatform','saazod','labtech','screenconnect')
+                        'TeamViewer'  = @('teamviewer')
+                        'Splashtop'   = @('splashtop')
+                        'LogMeIn'     = @('logmein','goto','lmi')
+                        'Kaseya'      = @('kaseya','vorex')
+                        'Datto'       = @('datto','centrastage')
+                        'N-able'      = @('n-able','ncentral','solarwinds','advanced monitoring')
+                        'NinjaRMM'    = @('ninja','ninjarmm','ninjaone')
+                        'Atera'       = @('atera')
+                        'Zoho'        = @('zoho')
+                    }
+                    if (-not $inExpectedPath) {
+                        $aliases = if ($vendorAliases.ContainsKey($vendor)) { $vendorAliases[$vendor] } else { @($vendor.ToLower()) }
+                        foreach ($alias in $aliases) {
+                            if ($exePath -match "(?i)$([regex]::Escape($alias))") { $inExpectedPath = $true; break }
+                        }
+                    }
+                    if ($inExpectedPath) { break } # Legitimate install location - skip
                     $statusFlag = switch ($sig.Status) {
                         'Valid'             { '' }
                         'NotSigned'         { ' [UNSIGNED]' }
