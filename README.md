@@ -29,7 +29,7 @@ Riposte is a self-contained PowerShell script built for SOC analysts who need to
 
 ### Forensics
 - **DFIR System Info** — OS baseline, network config, local admins, and AV posture
-- **Browser Forensics** — Extension auditing (name, version, source, permissions, install date, extension ID) and notification permission scanning with removal capability across Chrome, Edge, Brave, and Firefox
+- **Browser Forensics** — Extension auditing (name, version, source, permissions, install date, extension ID), notification permission scanning with removal capability, and Browser History across Chrome, Edge, Brave, and Firefox
 
 ### Remediation
 - Numbered result selection for targeted removal of registry keys, scheduled tasks, services, files, and processes
