@@ -3144,6 +3144,7 @@ function Invoke-BrowserHistory {
     }
 
     Write-Host "  Timeframe examples: 30m, 1h, 6h, 1d, 7d" -ForegroundColor DarkGray
+    Write-Host "  Date range example: 8/2/2026 8:20 to 8/5/2026 13:20" -ForegroundColor DarkGray
     $timeInput = Repair-Input (Read-Host " [?] Enter history timeframe (or Q to cancel)")
     if ($timeInput -eq "Q" -or $timeInput -eq "q") { return }
     if (-not $timeInput) { $timeInput = "24h" }
