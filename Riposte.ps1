@@ -741,10 +741,19 @@ function Process-RemediationLoop {
                     if ($typeGroup.Name -eq "ScreenConnect Event") {
                         $scParts = @{}
                         $item.Value -split '\|' | ForEach-Object {
-                            if ($_ -match '^(SC|EXE|RELAY):(.*)$') { $scParts[$Matches[1]] = $Matches[2].Trim() }
+                            if ($_ -match '^(SC|EXE|RELAY|PS4104):(.*)$') { $scParts[$Matches[1]] = $Matches[2].Trim() }
                         }
-                        if ($scParts['EXE'])   { Write-Host "       Exe Path  : " -NoNewline -ForegroundColor White;   Write-Host $scParts['EXE']   -ForegroundColor Cyan }
-                        if ($scParts['RELAY']) { Write-Host "       Relay     : " -NoNewline -ForegroundColor White;   Write-Host $scParts['RELAY'] -ForegroundColor DarkYellow }
+                        if ($scParts['EXE'])    { Write-Host "       Exe Path  : " -NoNewline -ForegroundColor White;   Write-Host $scParts['EXE']    -ForegroundColor Cyan }
+                        if ($scParts['RELAY'])  { Write-Host "       Relay     : " -NoNewline -ForegroundColor White;   Write-Host $scParts['RELAY']  -ForegroundColor DarkYellow }
+                        if ($scParts['PS4104']) {
+                            Write-Host "       Command   : " -NoNewline -ForegroundColor White
+                            $cmdLines = $scParts['PS4104'] -split "`r?`n" | Where-Object { $_.Trim() }
+                            $first = $true
+                            foreach ($cl in $cmdLines) {
+                                if ($first) { Write-Host $cl -ForegroundColor Green; $first = $false }
+                                else        { Write-Host "                  $cl" -ForegroundColor Green }
+                            }
+                        }
                     } elseif ($typeGroup.Name -eq "History") {
                         $histParts   = $item.Value -split "`nURL: "
                         $histBrowser = $histParts[0] -replace "^Browser: ",""
@@ -2904,6 +2913,33 @@ function Get-RMMHunt {
                     }
 
                     $displayValue = "SC:$firstLine|EXE:$scExe|RELAY:$scRelay"
+
+                    # If ScreenConnect logged "executed command of length: X", cross-reference
+                    # the PowerShell 4104 log at the same timestamp to get the actual command
+                    $ps4104 = ""
+                    if ($firstLine -match 'executed command of length') {
+                        try {
+                            $tStart = $evt.TimeCreated.AddSeconds(-2)
+                            $tEnd   = $evt.TimeCreated.AddSeconds(5)
+                            $psEvts = Get-WinEvent -FilterHashtable @{
+                                LogName   = 'Microsoft-Windows-PowerShell/Operational'
+                                Id        = 4104
+                                StartTime = $tStart
+                                EndTime   = $tEnd
+                            } -MaxEvents 5 -ErrorAction Stop
+                            if ($psEvts) {
+                                $block = $psEvts[0].Properties[2].Value
+                                if ($block -and $block.Trim().Length -gt 0) {
+                                    $ps4104 = if ($block.Length -gt 500) {
+                                        $block.Substring(0, 500) + "... [$($block.Length - 500) more chars]"
+                                    } else { $block }
+                                }
+                            }
+                        } catch {}
+                        if ($ps4104) {
+                            $displayValue = "SC:$firstLine|EXE:$scExe|RELAY:$scRelay|PS4104:$ps4104"
+                        }
+                    }
 
                     $scResults.Add([PSCustomObject]@{
                         Type            = "ScreenConnect Event"
