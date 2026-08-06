@@ -2546,7 +2546,7 @@ function Get-RMMHunt {
         @{ Name = "TeamViewer";           Exes = @("teamviewer.exe","teamviewer_service.exe","tv_w32.exe","tv_x64.exe");      Services = @("TeamViewer","TeamViewer12","TeamViewer13","TeamViewer14","TeamViewer15"); RegKeys = @("TeamViewer"); Paths = @("$env:ProgramFiles\TeamViewer","${env:ProgramFiles(x86)}\TeamViewer") },
         @{ Name = "GoTo (LogMeIn)";       Exes = @("logmein.exe","logmeinrescue.exe","goto.exe","g2mainapplication.exe","g2mstart.exe","lmiignition.exe","lmi_rescue.exe","lmi_rescue_srv.exe","support-logmeinrescue.exe"); Services = @("LogMeIn","LMIGuardianSvc","GoToMeeting","LMIRescue"); RegKeys = @("LogMeIn","GoTo","LogMeIn Rescue"); Paths = @("$env:ProgramFiles\LogMeIn","${env:ProgramFiles(x86)}\LogMeIn","$env:LOCALAPPDATA\LogMeIn Rescue Applet","$env:LOCALAPPDATA\LogMeIn") },
         @{ Name = "Atera";                Exes = @("ateraagent.exe","atera_agent.exe");                                        Services = @("AteraAgent");                                 RegKeys = @("Atera Networks");             Paths = @("$env:ProgramFiles\ATERA Networks") },
-        @{ Name = "NinjaRMM";             Exes = @("ninjarmmagent.exe","ninjaone.exe");                                        Services = @("Ninja RMM Agent","NinjaRMMAgent");            RegKeys = @("NinjaRMM","NinjaOne");        Paths = @("$env:ProgramFiles\NinjaRMMAgent") },
+        @{ Name = "NinjaRMM";             Exes = @("ninjarmmagent.exe","ninjaone.exe","ninjapatcher.exe");                  Services = @("Ninja RMM Agent","NinjaRMMAgent","NinjaOne");  RegKeys = @("NinjaRMM","NinjaOne");        Paths = @("$env:ProgramFiles\NinjaRMMAgent","$env:ProgramFiles\NinjaOne") },
         @{ Name = "Splashtop";            Exes = @("srserver.exe","splashtopsos.exe","srmanager.exe","sragent.exe");           Services = @("SplashtopRemoteService","SRService");         RegKeys = @("Splashtop");                  Paths = @("$env:ProgramFiles\Splashtop","${env:ProgramFiles(x86)}\Splashtop") },
         @{ Name = "RemotePC";             Exes = @("remotepc.exe","remotepchd.exe","remotepcservice.exe");                     Services = @("RemotePCService","RemotePCUIService");        RegKeys = @("RemotePC");                   Paths = @("$env:ProgramFiles\RemotePC") },
         @{ Name = "Kaseya VSA";           Exes = @("agentmon.exe","kaseyaremotecontrol.exe");                                  Services = @("Kaseya Agent","KaseyaRemoteControl");         RegKeys = @("Kaseya");                     Paths = @("$env:ProgramFiles\Kaseya") },
@@ -2734,6 +2734,100 @@ function Get-RMMHunt {
                 RemediationPath = $det.RemPath
             }
         }
+    }
+
+    # --- DISGUISED RMM DETECTION (Authenticode Signature Scan) ---
+    Write-Host "[*] Checking for disguised RMM binaries via digital signatures..." -ForegroundColor DarkGray
+
+    # Known RMM vendor signing certificate subjects
+    $rmmSigners = @{
+        'ConnectWise'       = @('connectwise, llc','connectwise llc','connectwise inc')
+        'TeamViewer'        = @('teamviewer gmbh','teamviewer germany gmbh')
+        'AnyDesk'           = @('anydesk software gmbh')
+        'LogMeIn'           = @('logmein, inc.','logmein inc','goto technologies usa, inc')
+        'Atera'             = @('atera networks ltd')
+        'NinjaRMM'          = @('ninjarmm llc','ninjaone')
+        'Splashtop'         = @('splashtop inc.')
+        'Kaseya'            = @('kaseya us llc','kaseya limited')
+        'Datto'             = @('datto inc.','datto, inc.')
+        'N-able'            = @('n-able technologies ltd','solarwinds worldwide')
+        'Zoho'              = @('zoho corporation pvt. ltd.','zoho corporation')
+        'RemotePC'          = @('remotepcinc.','idrive inc.')
+        'NetSupport'        = @('netsupport ltd')
+        'SimpleHelp'        = @('simple help limited')
+        'Action1'           = @('action1 corporation')
+        'Pulseway'          = @('mmsoft design ltd')
+        'MeshCentral'       = @('ylian saint-hilaire')
+        'FleetDeck'         = @('fleetdeck.io, inc.')
+    }
+
+    # Collect known legitimate exe names to exclude (these are already caught by normal detection)
+    $knownRmmExes = @()
+    foreach ($t in $rmmTools) { foreach ($e in $t.Exes) { $knownRmmExes += $e.ToLower() } }
+
+    # Scan running processes first - fastest and most impactful
+    $procPaths = Get-CimInstance Win32_Process -ErrorAction SilentlyContinue |
+        Where-Object { $_.ExecutablePath -and $_.ExecutablePath -notmatch '(?i)^C:\\Windows\\' } |
+        Select-Object -ExpandProperty ExecutablePath | Sort-Object -Unique
+
+    # Also scan high-risk paths for recently written exes
+    $filePaths = @()
+    foreach ($ud in (Get-ChildItem "C:\Users" -Directory -ErrorAction SilentlyContinue | Where-Object { $_.Name -notmatch '^(Public|Default|Default User|All Users)$' })) {
+        foreach ($subPath in @("Downloads","AppData\Local\Temp","AppData\Roaming","Desktop")) {
+            $scanDir = Join-Path $ud.FullName $subPath
+            if (Test-Path $scanDir) {
+                Get-ChildItem $scanDir -Filter "*.exe" -File -ErrorAction SilentlyContinue |
+                    Where-Object { $_.LastWriteTime -ge (Get-Date).AddDays(-30) } |
+                    ForEach-Object { $filePaths += $_.FullName }
+            }
+        }
+    }
+
+    $allPathsToCheck = @($procPaths) + @($filePaths) | Sort-Object -Unique
+
+    foreach ($exePath in $allPathsToCheck) {
+        if (-not (Test-Path $exePath -ErrorAction SilentlyContinue)) { continue }
+        $exeName = [System.IO.Path]::GetFileName($exePath).ToLower()
+        # Skip if this is a known legitimate RMM executable name - already caught
+        if ($knownRmmExes -contains $exeName) { continue }
+
+        try {
+            $sig = Get-AuthenticodeSignature -FilePath $exePath -ErrorAction Stop
+            if (-not $sig -or -not $sig.SignerCertificate) { continue }
+            $signerSubject = $sig.SignerCertificate.Subject.ToLower()
+
+            foreach ($vendor in $rmmSigners.Keys) {
+                $matched = $false
+                foreach ($sigStr in $rmmSigners[$vendor]) {
+                    if ($signerSubject -match [regex]::Escape($sigStr)) { $matched = $true; break }
+                }
+                if ($matched) {
+                    $statusFlag = switch ($sig.Status) {
+                        'Valid'             { '' }
+                        'NotSigned'         { ' [UNSIGNED]' }
+                        'UnknownError'      { ' [UNKNOWN STATUS]' }
+                        'HashMismatch'      { ' [HASH MISMATCH - TAMPERED]' }
+                        default             { " [$($sig.Status.ToString().ToUpper())]" }
+                    }
+                    # Check for revoked specifically
+                    if ($sig.StatusMessage -match 'revoked') { $statusFlag = ' [REVOKED]' }
+
+                    $hashes = Get-FileHashes -filePath $exePath
+                    $results += [PSCustomObject]@{
+                        Type            = "RMM: $vendor (Disguised)"
+                        User            = "Disguised Binary"
+                        Timestamp       = "Detected: $(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')"
+                        Name            = "[!] $exeName  signed by $vendor$statusFlag"
+                        Value           = "Path: $exePath | Signer: $($sig.SignerCertificate.Subject)"
+                        SHA1            = $hashes.SHA1
+                        SHA256          = $hashes.SHA256
+                        RemediationType = "File"
+                        RemediationPath = $exePath
+                    }
+                    break
+                }
+            }
+        } catch {}
     }
 
     # --- SCREENCONNECT EXTENDED DETECTION ---
