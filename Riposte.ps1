@@ -3085,14 +3085,9 @@ function Get-RMMHunt {
                                     $p6msg = try { $p6.Message } catch { "" }
                                     if ($p6msg -match 'HostApplication=(.+?)[\r\n]') {
                                         $hostApp = $Matches[1].Trim()
-                                        # Decode Base64 encoded command if present
                                         if ($hostApp -match '-EncodedCommand\s+([A-Za-z0-9+/=]+)') {
-                                            try {
-                                                $decoded = [System.Text.Encoding]::Unicode.GetString([System.Convert]::FromBase64String($Matches[1]))
-                                                $ps4104 = if ($decoded.Length -gt 500) {
-                                                    $decoded.Substring(0, 500) + "... [$($decoded.Length - 500) more chars]"
-                                                } else { $decoded }
-                                                break
+                                            $ps4104 = "[Encoded] $($Matches[1])"
+                                            break
                                             } catch {}
                                         } elseif ($hostApp -notmatch '(?i)riposte|SentinelRSH') {
                                             $ps4104 = if ($hostApp.Length -gt 500) {
