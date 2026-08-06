@@ -3088,7 +3088,6 @@ function Get-RMMHunt {
                                         if ($hostApp -match '-EncodedCommand\s+([A-Za-z0-9+/=]+)') {
                                             $ps4104 = "[Encoded] $($Matches[1])"
                                             break
-                                            } catch {}
                                         } elseif ($hostApp -notmatch '(?i)riposte|SentinelRSH') {
                                             $ps4104 = if ($hostApp.Length -gt 500) {
                                                 $hostApp.Substring(0, 500) + "... [$($hostApp.Length - 500) more chars]"
