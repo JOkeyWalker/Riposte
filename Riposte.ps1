@@ -40,6 +40,7 @@ function Show-Banner {
 
 function Pause {
     Write-Host "`n[+] Press ENTER to continue..." -ForegroundColor Gray
+    # Use a short timeout - in Backstage/RTR shells Read-Host can block unexpectedly
     $null = Read-Host
 }
 
@@ -1526,6 +1527,9 @@ function Get-PSHistory {
             # Skip high-noise system accounts with no investigative value in PS history
             if ($resolvedUser -match "^NT AUTHORITY\\(SYSTEM|NETWORK SERVICE|LOCAL SERVICE)$") { continue }
 
+            # Skip systemprofile - SYSTEM account's local profile, always Riposte/agent activity
+            if ($resolvedUser -match "(?i)^systemprofile$|^SYSTEM$|systemprofile") { continue }
+
             # Extract script block content based on event ID
             $scriptBlock = ""
             switch ($event.Id) {
@@ -2331,6 +2335,7 @@ function Get-RecentlyWrittenFiles {
             $dirCount++
             if ($dirCount % 50 -eq 0) {
                 Write-Host "[*] Scanning: $dirCount directories checked, $matchCount matches so far..." -ForegroundColor DarkGray
+                [Console]::Out.Flush()
             }
             
             foreach ($ext in $targetExtensions) {
