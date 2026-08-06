@@ -1739,7 +1739,8 @@ function Invoke-EventLogSearch {
         @{ Log = "Microsoft-Windows-TaskScheduler/Operational"; IDs = @(106, 140, 141, 200, 201) },
         @{ Log = "Microsoft-Windows-PowerShell/Operational"; IDs = @(4104) },
         @{ Log = "Microsoft-Windows-WinRM/Operational"; IDs = @(91, 142, 168, 169) },
-        @{ Log = "Microsoft-Windows-Sysmon/Operational"; IDs = @(1, 3, 7, 11, 12, 13) }
+        @{ Log = "Microsoft-Windows-Sysmon/Operational"; IDs = @(1, 3, 7, 11, 12, 13) },
+        @{ Log = "ScreenConnect"; IDs = @() }
     )
 
     $eventDesc = @{
@@ -1757,9 +1758,15 @@ function Invoke-EventLogSearch {
         200  = "Task Action Started";    201  = "Task Action Completed"
         4104 = "PS Script Block"
         91   = "WinRM Session Created";  142  = "WinRM Connect Failed";    168  = "WinRM Auth Attempt"
+        100  = "SC Session Connected";    101  = "SC Session Disconnected"; 200  = "SC Command Executed"
+        201  = "SC File Transfer";        202  = "SC Session Note"
         169  = "WinRM Auth Success"
         1    = "Sysmon Process Create";  3    = "Sysmon Network Connect";  7    = "Sysmon Image Load"
         11   = "Sysmon File Created";    12   = "Sysmon Registry Create";  13   = "Sysmon Registry Set"
+        1000 = "Application Error/Crash"; 1001 = "App Crash Report"
+        1033 = "MSI Product Installed";  1034 = "MSI Product Removed"
+        1040 = "MSI Transaction Start";  1042 = "MSI Transaction End";     11707 = "MSI Install Success"
+        11708 = "MSI Install Failed";    11724 = "MSI Product Removed";    11728 = "MSI Config Change"
     }
 
     foreach ($target in $eventLogTargets) {
@@ -2036,7 +2043,8 @@ function Get-EventLogSearch {
         @{ Log = "Microsoft-Windows-TaskScheduler/Operational"; IDs = @(106, 140, 141, 200, 201) },
         @{ Log = "Microsoft-Windows-PowerShell/Operational"; IDs = @(4104) },
         @{ Log = "Microsoft-Windows-WinRM/Operational"; IDs = @(91, 142, 168, 169) },
-        @{ Log = "Microsoft-Windows-Sysmon/Operational"; IDs = @(1, 3, 7, 11, 12, 13) }
+        @{ Log = "Microsoft-Windows-Sysmon/Operational"; IDs = @(1, 3, 7, 11, 12, 13) },
+        @{ Log = "ScreenConnect"; IDs = @() }
     )
 
     $eventDesc = @{
@@ -2054,9 +2062,15 @@ function Get-EventLogSearch {
         200  = "Task Action Started";    201  = "Task Action Completed"
         4104 = "PS Script Block"
         91   = "WinRM Session Created";  142  = "WinRM Connect Failed";    168  = "WinRM Auth Attempt"
+        100  = "SC Session Connected";    101  = "SC Session Disconnected"; 200  = "SC Command Executed"
+        201  = "SC File Transfer";        202  = "SC Session Note"
         169  = "WinRM Auth Success"
         1    = "Sysmon Process Create";  3    = "Sysmon Network Connect";  7    = "Sysmon Image Load"
         11   = "Sysmon File Created";    12   = "Sysmon Registry Create";  13   = "Sysmon Registry Set"
+        1000 = "Application Error/Crash"; 1001 = "App Crash Report"
+        1033 = "MSI Product Installed";  1034 = "MSI Product Removed"
+        1040 = "MSI Transaction Start";  1042 = "MSI Transaction End";     11707 = "MSI Install Success"
+        11708 = "MSI Install Failed";    11724 = "MSI Product Removed";    11728 = "MSI Config Change"
     }
 
     foreach ($target in $eventLogTargets) {
@@ -3042,8 +3056,8 @@ function Get-RMMHunt {
                     $ps4104 = ""
                     if ($firstLine -match 'executed command of length') {
                         try {
-                            $tStart = $evt.TimeCreated.AddSeconds(-2)
-                            $tEnd   = $evt.TimeCreated.AddSeconds(5)
+                            $tStart = $evt.TimeCreated.AddSeconds(-30)
+                            $tEnd   = $evt.TimeCreated.AddSeconds(30)
                             $psEvts = Get-WinEvent -FilterHashtable @{
                                 LogName   = 'Microsoft-Windows-PowerShell/Operational'
                                 Id        = 4104
