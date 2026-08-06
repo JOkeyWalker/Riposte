@@ -3069,6 +3069,41 @@ function Get-RMMHunt {
                                 }
                             }
                         } catch {}
+
+                        # Also check classic PS log (ID 600) for HostApplication with EncodedCommand
+                        if (-not $ps4104) {
+                            try {
+                                $tStart = $evt.TimeCreated.AddSeconds(-30)
+                                $tEnd   = $evt.TimeCreated.AddSeconds(30)
+                                $ps600 = Get-WinEvent -FilterHashtable @{
+                                    LogName   = 'Windows PowerShell'
+                                    Id        = @(400, 600)
+                                    StartTime = $tStart
+                                    EndTime   = $tEnd
+                                } -MaxEvents 10 -ErrorAction Stop
+                                foreach ($p6 in $ps600) {
+                                    $p6msg = try { $p6.Message } catch { "" }
+                                    if ($p6msg -match 'HostApplication=(.+?)[\r\n]') {
+                                        $hostApp = $Matches[1].Trim()
+                                        # Decode Base64 encoded command if present
+                                        if ($hostApp -match '-EncodedCommand\s+([A-Za-z0-9+/=]+)') {
+                                            try {
+                                                $decoded = [System.Text.Encoding]::Unicode.GetString([System.Convert]::FromBase64String($Matches[1]))
+                                                $ps4104 = if ($decoded.Length -gt 500) {
+                                                    $decoded.Substring(0, 500) + "... [$($decoded.Length - 500) more chars]"
+                                                } else { $decoded }
+                                                break
+                                            } catch {}
+                                        } elseif ($hostApp -notmatch '(?i)riposte|SentinelRSH') {
+                                            $ps4104 = if ($hostApp.Length -gt 500) {
+                                                $hostApp.Substring(0, 500) + "... [$($hostApp.Length - 500) more chars]"
+                                            } else { $hostApp }
+                                            break
+                                        }
+                                    }
+                                }
+                            } catch {}
+                        }
                         if ($ps4104) {
                             $displayValue = "SC:$firstLine|EXE:$scExe|RELAY:$scRelay|PS4104:$ps4104"
                         }
