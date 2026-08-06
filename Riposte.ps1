@@ -1473,24 +1473,31 @@ function Get-PSHistory {
 
     Write-Host "`n[*] Querying PowerShell Event Logs..." -ForegroundColor Yellow
     Write-Host "    Range: $($startTime.ToString('yyyy-MM-dd HH:mm:ss')) to $($endTime.ToString('yyyy-MM-dd HH:mm:ss'))" -ForegroundColor DarkGray
+    [Console]::Out.Flush()
     
     $events = $null
     $allEvents = [System.Collections.Generic.List[object]]::new()
 
     # Source 1: Script Block Logging (ID 4104) - full script content
+    Write-Host "    Checking Script Block Logging (4104)..." -ForegroundColor DarkGray
+    [Console]::Out.Flush()
     try {
         $filter = @{ LogName = 'Microsoft-Windows-PowerShell/Operational'; ID = 4104; StartTime = $startTime; EndTime = $endTime }
         $evts = Get-WinEvent -FilterHashtable $filter -MaxEvents 1000 -ErrorAction Stop
         foreach ($e in $evts) { $allEvents.Add($e) }
         Write-Host "    [+] Script Block Logging (4104): $($evts.Count) events" -ForegroundColor DarkGray
+        [Console]::Out.Flush()
     } catch {}
 
     # Source 2: Module Logging (ID 4103) - cmdlet-level detail, active even without script block logging
+    Write-Host "    Checking Module Logging (4103)..." -ForegroundColor DarkGray
+    [Console]::Out.Flush()
     try {
         $filter = @{ LogName = 'Microsoft-Windows-PowerShell/Operational'; ID = 4103; StartTime = $startTime; EndTime = $endTime }
         $evts = Get-WinEvent -FilterHashtable $filter -MaxEvents 500 -ErrorAction Stop
         foreach ($e in $evts) { $allEvents.Add($e) }
         Write-Host "    [+] Module Logging (4103): $($evts.Count) events" -ForegroundColor DarkGray
+        [Console]::Out.Flush()
     } catch {}
 
     # Sort all events by time descending
@@ -1553,7 +1560,15 @@ function Get-PSHistory {
                 'Microsoft\.PowerShell\.Cmdletization\.Cim',            # CIM auto-generated cmdlet wrappers
                 '\[Microsoft\.PowerShell\.Cmdletization\.Generated\]',  # Generated CIM module tag
                 'root/standardcimv2/MSFT_',                             # Windows CIM class module loads
-                '__cmdletization_BindCommonParameters'                  # CIM module boilerplate function
+                '__cmdletization_BindCommonParameters',                 # CIM module boilerplate function
+                'function Get-RunMRU',                                  # Riposte own execution
+                'function Get-Persistence',                             # Riposte own execution
+                'function Get-RMMHunt',                                 # Riposte own execution
+                'function Show-Menu',                                   # Riposte own execution
+                'function Process-RemediationLoop',                     # Riposte own execution
+                'Contre-attaque\. Traque\. Neutralise\.',               # Riposte banner
+                'Set-Alias gcls -Value Get-CimClass',                  # Riposte alias setup
+                'while \(\$true\) \{.*Show-Menu'                       # Riposte main loop
             )
             $isNoise = $false
             foreach ($pattern in $noisePatterns) {
@@ -1607,7 +1622,7 @@ function Get-PSHistory {
                 Write-Host "     Command   :" -ForegroundColor White
 
                 $fullScript  = $res.ScriptBlock
-                $charLimit   = 2000
+                $charLimit   = 500
                 $truncated   = $fullScript.Length -gt $charLimit
                 $displayText = if ($truncated) { $fullScript.Substring(0, $charLimit) } else { $fullScript }
 
@@ -1620,11 +1635,12 @@ function Get-PSHistory {
                     $remaining = $fullScript.Length - $charLimit
                     Write-Host ""
                     Write-Host "       [... $remaining additional characters not displayed]" -ForegroundColor Yellow
-                    Write-Host "       Script block exceeds 2,000 characters. To view in full, run:" -ForegroundColor DarkGray
+                    Write-Host "       Script block exceeds 500 characters. To view in full, run:" -ForegroundColor DarkGray
                     Write-Host "       Get-WinEvent -FilterHashtable @{LogName='Microsoft-Windows-PowerShell/Operational'; Id=4104} | Where-Object { `$_.TimeCreated -ge [datetime]'$($res.Time)' -and `$_.TimeCreated -le [datetime]'$($res.Time)'.AddSeconds(1) } | Select-Object -ExpandProperty Message" -ForegroundColor Cyan
                 }
 
                 Write-Host " ---------------------------------------------------" -ForegroundColor DarkGray
+                [Console]::Out.Flush()
             }
             
             Write-Host "`n---------------------------------------------------------------" -ForegroundColor DarkCyan
