@@ -3625,11 +3625,19 @@ namespace BH {
 
         # ClickFix correlation: check if RunMRU was written within 5 minutes after this visit
         $clickFixFlag = ""
-        if ($e.Kind -eq 'Visit' -and $runMruTimes.ContainsKey($e.User)) {
-            $mruTime = $runMruTimes[$e.User]
-            $diffSeconds = ($mruTime - $e.Time).TotalSeconds
-            if ($diffSeconds -ge 0 -and $diffSeconds -le 300) {
-                $clickFixFlag = "|CLICKFIX:RunMRU written $([math]::Round($diffSeconds))s after this visit"
+        if ($e.Kind -eq 'Visit') {
+            # Normalize username for matching - strip domain prefix and handle user.domain format
+            $visitUser = $e.User.ToLower() -replace '^.*\\','' -replace '\..+$',''
+            foreach ($mruUser in $runMruTimes.Keys) {
+                $normMruUser = $mruUser.ToLower() -replace '^.*\\','' -replace '\..+$',''
+                if ($normMruUser -eq $visitUser) {
+                    $mruTime = $runMruTimes[$mruUser]
+                    $diffSeconds = ($mruTime - $e.Time).TotalSeconds
+                    if ($diffSeconds -ge 0 -and $diffSeconds -le 300) {
+                        $clickFixFlag = "|CLICKFIX:RunMRU written $([math]::Round($diffSeconds))s after this visit"
+                    }
+                    break
+                }
             }
         }
 
