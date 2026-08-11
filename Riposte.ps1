@@ -792,11 +792,7 @@ function Process-RemediationLoop {
                             Write-Host "       Source    : " -NoNewline -ForegroundColor White;  Write-Host $parts['VISIT']    -ForegroundColor DarkGray
                             Write-Host "       Duration  : " -NoNewline -ForegroundColor White;  Write-Host "$($parts['DUR'])s  |  Visits: $($parts['COUNT'])" -ForegroundColor DarkGray
                         }
-                        if ($parts['CLICKFIX']) {
-                            Write-Host "       " -NoNewline
-                            Write-Host "RunMRU    : " -NoNewline -ForegroundColor White
-                            Write-Host $parts['CLICKFIX'] -ForegroundColor Yellow
-                        }
+
                     } elseif ($typeGroup.Name -eq "Extension") {
                         Write-Host "       $($item.Value)" -ForegroundColor Green
                     } elseif ($typeGroup.Name -match "Scheduled Task|Service|Process|WMI|RunMRU") {
@@ -3583,37 +3579,6 @@ namespace BH {
         return
     }
 
-    # Collect RunMRU key last write times per user for ClickFix correlation
-    Write-Host "[*] Checking RunMRU for ClickFix correlation..." -ForegroundColor DarkGray
-    $runMruTimes = @{}  # key = username, value = LastWriteTime
-    try {
-        # Live loaded hives
-        Get-ChildItem HKU: -ErrorAction SilentlyContinue | Where-Object { $_.PSChildName -match '^S-1-' -and $_.PSChildName -notmatch '_Classes$' } | ForEach-Object {
-            $sid = $_.PSChildName
-            $mruPath = "HKU:\$sid\Software\Microsoft\Windows\CurrentVersion\Explorer\RunMRU"
-            if (Test-Path $mruPath) {
-                $username = Resolve-SidToUsername -sid $sid
-                $lastWrite = (Get-Item $mruPath -ErrorAction SilentlyContinue).LastWriteTime
-                if ($lastWrite) { $runMruTimes[$username] = $lastWrite }
-            }
-        }
-        # Offline hives for logged-off users
-        Get-ChildItem "C:\Users" -Directory -ErrorAction SilentlyContinue | Where-Object { $_.Name -notmatch '^(Public|Default|Default User|All Users)$' } | ForEach-Object {
-            $ntuserPath = Join-Path $_.FullName "NTUSER.DAT"
-            if (-not (Test-Path $ntuserPath)) { return }
-            $tempHive = "S1_BH_MRU_$($_.Name)"
-            if (-not (Test-Path "HKU:\$tempHive")) {
-                reg.exe load "HKU\$tempHive" "$ntuserPath" 2>&1 | Out-Null
-            }
-            $mruPath = "HKU:\$tempHive\Software\Microsoft\Windows\CurrentVersion\Explorer\RunMRU"
-            if (Test-Path $mruPath) {
-                $lastWrite = (Get-Item $mruPath -ErrorAction SilentlyContinue).LastWriteTime
-                if ($lastWrite) { $runMruTimes[$_.Name] = $lastWrite }
-                reg.exe unload "HKU\$tempHive" 2>&1 | Out-Null
-            }
-        }
-    } catch {}
-
     # Build results for Process-RemediationLoop
     $results = [System.Collections.Generic.List[PSCustomObject]]::new()
     foreach ($e in $out) {
@@ -3623,30 +3588,13 @@ namespace BH {
             "VISIT:$($e.Transition)|DUR:$($e.Duration)|COUNT:$($e.Visits)|URL:$($e.URL)"
         }
 
-        # ClickFix correlation: check if RunMRU was written within 5 minutes after this visit
-        $clickFixFlag = ""
-        if ($e.Kind -eq 'Visit') {
-            # Normalize username for matching - strip domain prefix and handle user.domain format
-            $visitUser = $e.User.ToLower() -replace '^.*\\','' -replace '\..+$',''
-            foreach ($mruUser in $runMruTimes.Keys) {
-                $normMruUser = $mruUser.ToLower() -replace '^.*\\','' -replace '\..+$',''
-                if ($normMruUser -eq $visitUser) {
-                    $mruTime = $runMruTimes[$mruUser]
-                    $diffSeconds = ($mruTime - $e.Time).TotalSeconds
-                    if ($diffSeconds -ge 0 -and $diffSeconds -le 300) {
-                        $clickFixFlag = "|CLICKFIX:RunMRU written $([math]::Round($diffSeconds))s after this visit"
-                    }
-                    break
-                }
-            }
-        }
 
         $results.Add([PSCustomObject]@{
             Type            = "Browser History"
             User            = $e.User
             Timestamp       = $e.Time.ToString("yyyy-MM-dd HH:mm:ss")
             Name            = "$($e.Kind): $($e.Name)"
-            Value           = "$valueStr$clickFixFlag"
+            Value           = "$valueStr"
             SHA1            = "N/A"
             SHA256          = "N/A"
             RemediationType = "None"
