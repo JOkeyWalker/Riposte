@@ -609,13 +609,13 @@ function Invoke-Remediation {
             }
 
             "Process" {
-                $pid = [int]$path
-                $proc = Get-Process -Id $pid -ErrorAction SilentlyContinue
+                $targetPid = [int]$path
+                $proc = Get-Process -Id $targetPid -ErrorAction SilentlyContinue
                 if ($proc) {
-                    Stop-Process -Id $pid -Force -ErrorAction Stop
-                    Write-Host "  [+] Process terminated: PID $pid ($($proc.Name))" -ForegroundColor Green
+                    Stop-Process -Id $targetPid -Force -ErrorAction Stop
+                    Write-Host "  [+] Process terminated: PID $targetPid ($($proc.Name))" -ForegroundColor Green
                 } else {
-                    Write-Host "  [-] Process PID $pid not found (may have already exited)." -ForegroundColor Red
+                    Write-Host "  [-] Process PID $targetPid not found (may have already exited)." -ForegroundColor Red
                     return $false
                 }
                 return $true
