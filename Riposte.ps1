@@ -2996,12 +2996,23 @@ function Get-RMMHunt {
         Get-ChildItem "C:\Windows\Prefetch" -Filter "SCREENCONNECT*.pf" -ErrorAction SilentlyContinue |
             ForEach-Object {
                 $lastExec = try { $_.LastWriteTime.ToString("yyyy-MM-dd HH:mm:ss") } catch { "Unknown" }
+
+                # Attempt to extract the original instance ID by reading path strings embedded in the .pf file
+                $instanceId = "Unknown"
+                try {
+                    $pfBytes = [System.IO.File]::ReadAllBytes($_.FullName)
+                    $pfText  = [System.Text.Encoding]::Unicode.GetString($pfBytes)
+                    if ($pfText -match 'SCREENCONNECT CLIENT \(([A-F0-9]+)\)') {
+                        $instanceId = $Matches[1]
+                    }
+                } catch {}
+
                 $results += [PSCustomObject]@{
                     Type            = "RMM: ScreenConnect"
                     User            = "Prefetch Evidence"
-                    Timestamp       = "Last executed: $lastExec"
+                    Timestamp       = "Last updated (~execution time): $lastExec"
                     Name            = "ScreenConnect"
-                    Value           = "$($_.FullName) | Execution confirmed even if binary removed"
+                    Value           = "$($_.FullName) | Instance ID: $instanceId | Execution confirmed even if binary removed"
                     SHA1            = "N/A"
                     SHA256          = "N/A"
                     RemediationType = "File"
