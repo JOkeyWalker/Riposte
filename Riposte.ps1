@@ -2677,6 +2677,24 @@ function Get-RMMHunt {
             }
         }
 
+        # 4b. ScreenConnect Client folders use a unique instance ID suffix (e.g. "ScreenConnect Client (abc123)")
+        # which the fixed paths above cannot match - scan Program Files directly for this pattern
+        if ($tool.Name -eq "ScreenConnect") {
+            foreach ($pfRoot in @("C:\Program Files (x86)", "C:\Program Files")) {
+                if (-not (Test-Path $pfRoot)) { continue }
+                Get-ChildItem $pfRoot -Directory -Filter "ScreenConnect Client*" -ErrorAction SilentlyContinue | ForEach-Object {
+                    $installDate = Get-InstallDateFromPath -p $_.FullName
+                    $detections += [PSCustomObject]@{
+                        DetectionType = "Path on Disk"
+                        Detail        = $_.FullName
+                        RemType       = "File"
+                        RemPath       = $_.FullName
+                        InstallDate   = $installDate
+                    }
+                }
+            }
+        }
+
         foreach ($det in $detections) {
             $dateStr = if ($det.InstallDate) { $det.InstallDate } else { "Unknown" }
 
