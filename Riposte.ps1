@@ -1763,7 +1763,7 @@ function Invoke-EventLogSearch {
         1    = "Sysmon Process Create";  3    = "Sysmon Network Connect";  7    = "Sysmon Image Load"
         11   = "Sysmon File Created";    12   = "Sysmon Registry Create";  13   = "Sysmon Registry Set"
         1000 = "Application Error/Crash"; 1001 = "App Crash Report"
-        1033 = "MSI Product Installed";  1034 = "MSI Product Removed"
+        1033 = "MSI Product Installed";  1034 = "MSI Product Removed";     1035 = "MSI Product Reconfigured"
         1040 = "MSI Transaction Start";  1042 = "MSI Transaction End";     11707 = "MSI Install Success"
         11708 = "MSI Install Failed";    11724 = "MSI Product Removed";    11728 = "MSI Config Change"
     }
@@ -1970,6 +1970,33 @@ function Invoke-EventLogSearch {
                 })
             }
         } catch { }
+    }
+
+    # Collapse repeated MSI Reconfigured (1035) events for the same product into one summary entry
+    if ($results.Count -gt 0) {
+        $msiReconfig = $results | Where-Object { $_.Name -like "*MSI Product Reconfigured*" }
+        $otherResults = $results | Where-Object { $_.Name -notlike "*MSI Product Reconfigured*" }
+        if ($msiReconfig.Count -gt 1) {
+            $groups = $msiReconfig | Group-Object { $_.Value -replace '\d{2}:\d{2}:\d{2}', '' }
+            $collapsed = [System.Collections.Generic.List[PSCustomObject]]::new()
+            foreach ($g in $groups) {
+                if ($g.Count -eq 1) { $collapsed.Add($g.Group[0]); continue }
+                $sorted = $g.Group | Sort-Object Timestamp
+                $first = $sorted[0]; $last = $sorted[-1]
+                $collapsed.Add([PSCustomObject]@{
+                    Type            = $first.Type
+                    User            = $first.User
+                    Timestamp       = "$($last.Timestamp)  (repeated $($g.Count)x, earliest: $($first.Timestamp))"
+                    Name            = $first.Name
+                    Value           = $first.Value
+                    SHA1            = "N/A"; SHA256 = "N/A"
+                    RemediationType = "None"; RemediationPath = "N/A"
+                })
+            }
+            $results = [System.Collections.Generic.List[PSCustomObject]]::new()
+            foreach ($r in $otherResults) { $results.Add($r) }
+            foreach ($r in $collapsed) { $results.Add($r) }
+        }
     }
 
     if ($results.Count -gt 0) {
@@ -2065,7 +2092,7 @@ function Get-EventLogSearch {
         1    = "Sysmon Process Create";  3    = "Sysmon Network Connect";  7    = "Sysmon Image Load"
         11   = "Sysmon File Created";    12   = "Sysmon Registry Create";  13   = "Sysmon Registry Set"
         1000 = "Application Error/Crash"; 1001 = "App Crash Report"
-        1033 = "MSI Product Installed";  1034 = "MSI Product Removed"
+        1033 = "MSI Product Installed";  1034 = "MSI Product Removed";     1035 = "MSI Product Reconfigured"
         1040 = "MSI Transaction Start";  1042 = "MSI Transaction End";     11707 = "MSI Install Success"
         11708 = "MSI Install Failed";    11724 = "MSI Product Removed";    11728 = "MSI Config Change"
     }
@@ -2272,6 +2299,33 @@ function Get-EventLogSearch {
                 })
             }
         } catch { }
+    }
+
+    # Collapse repeated MSI Reconfigured (1035) events for the same product into one summary entry
+    if ($results.Count -gt 0) {
+        $msiReconfig = $results | Where-Object { $_.Name -like "*MSI Product Reconfigured*" }
+        $otherResults = $results | Where-Object { $_.Name -notlike "*MSI Product Reconfigured*" }
+        if ($msiReconfig.Count -gt 1) {
+            $groups = $msiReconfig | Group-Object { $_.Value -replace '\d{2}:\d{2}:\d{2}', '' }
+            $collapsed = [System.Collections.Generic.List[PSCustomObject]]::new()
+            foreach ($g in $groups) {
+                if ($g.Count -eq 1) { $collapsed.Add($g.Group[0]); continue }
+                $sorted = $g.Group | Sort-Object Timestamp
+                $first = $sorted[0]; $last = $sorted[-1]
+                $collapsed.Add([PSCustomObject]@{
+                    Type            = $first.Type
+                    User            = $first.User
+                    Timestamp       = "$($last.Timestamp)  (repeated $($g.Count)x, earliest: $($first.Timestamp))"
+                    Name            = $first.Name
+                    Value           = $first.Value
+                    SHA1            = "N/A"; SHA256 = "N/A"
+                    RemediationType = "None"; RemediationPath = "N/A"
+                })
+            }
+            $results = [System.Collections.Generic.List[PSCustomObject]]::new()
+            foreach ($r in $otherResults) { $results.Add($r) }
+            foreach ($r in $collapsed) { $results.Add($r) }
+        }
     }
 
     if ($results.Count -gt 0) {
