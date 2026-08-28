@@ -797,6 +797,20 @@ function Process-RemediationLoop {
                         Write-Host "       $($item.Value)" -ForegroundColor Green
                     } elseif ($typeGroup.Name -match "Scheduled Task|Service|Process|WMI|RunMRU") {
                         Write-Host "       Action    : $($item.Value)" -ForegroundColor Green
+                    } elseif ($typeGroup.Name -like "RMM:*" -and $item.Value -match '\| Instance ID: ') {
+                        # Prefetch evidence - split path, instance ID, and note into separately colored segments
+                        $pfParts = $item.Value -split '\s*\|\s*'
+                        Write-Host "       Path/Value: " -NoNewline -ForegroundColor White
+                        Write-Host $pfParts[0] -ForegroundColor Green
+                        foreach ($seg in $pfParts[1..($pfParts.Count-1)]) {
+                            if ($seg -match '^Instance ID:\s*(.+)$') {
+                                Write-Host "       Instance ID: " -NoNewline -ForegroundColor White
+                                Write-Host $Matches[1] -ForegroundColor Cyan
+                            } else {
+                                Write-Host "       Note      : " -NoNewline -ForegroundColor White
+                                Write-Host $seg -ForegroundColor DarkGray
+                            }
+                        }
                     } else {
                         Write-Host "       Path/Value: $($item.Value)" -ForegroundColor Green
                     }
