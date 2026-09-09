@@ -983,7 +983,7 @@ function Get-Persistence {
                     }
                 }
 
-                $resolvedPath = Extract-FilePath -cmdline $action
+                $resolvedPath = if ($action) { Extract-FilePath -cmdline $action } else { $null }
                 $hashes = Get-FileHashes -filePath $resolvedPath
 
                 $results += [PSCustomObject]@{
@@ -1014,7 +1014,7 @@ function Get-Persistence {
             )
         }
         foreach ($service in $services) {
-            $resolvedPath = Extract-FilePath -cmdline $service.PathName
+            $resolvedPath = if ($service.PathName) { Extract-FilePath -cmdline $service.PathName } else { $null }
             $hashes = Get-FileHashes -filePath $resolvedPath
 
             $results += [PSCustomObject]@{
@@ -1126,7 +1126,7 @@ function Invoke-GlobalHunt {
         $regKeys = Get-RegistryRunKeys
         foreach ($rk in $regKeys) {
             if ($rk.Name -match $regexPattern -or $rk.Value -match $regexPattern) {
-                $resolvedPath = Extract-FilePath -cmdline $rk.Value
+                $resolvedPath = if ($rk.Value) { Extract-FilePath -cmdline $rk.Value } else { $null }
                 $hashes = Get-FileHashes -filePath $resolvedPath
                 $globalResults.Add([PSCustomObject]@{
                     Type            = "Registry Value Match"
@@ -1177,7 +1177,7 @@ function Invoke-GlobalHunt {
                     }
                 }
                 
-                $resolvedPath = Extract-FilePath -cmdline $action
+                $resolvedPath = if ($action) { Extract-FilePath -cmdline $action } else { $null }
                 $hashes = Get-FileHashes -filePath $resolvedPath
 
                 $globalResults.Add([PSCustomObject]@{
@@ -1200,7 +1200,7 @@ function Invoke-GlobalHunt {
     $services = Get-CimInstance Win32_Service
     foreach ($service in $services) {
         if ($service.Name -match $regexPattern -or $service.DisplayName -match $regexPattern -or $service.PathName -match $regexPattern) {
-            $resolvedPath = Extract-FilePath -cmdline $service.PathName
+            $resolvedPath = if ($service.PathName) { Extract-FilePath -cmdline $service.PathName } else { $null }
             $hashes = Get-FileHashes -filePath $resolvedPath
 
             $globalResults.Add([PSCustomObject]@{
