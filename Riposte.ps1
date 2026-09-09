@@ -1134,7 +1134,16 @@ function Search-GlobalKeyword {
 
     $regexPatterns = @()
     foreach ($kw in $parsedKeywords) {
-        $regexPatterns += Convert-WildcardToRegex -pattern $kw
+        $basePattern = Convert-WildcardToRegex -pattern $kw
+        # Anchor short keywords (under 3 chars, no wildcards) to word boundaries so they only
+        # match as a distinct token (e.g. "OB" matches "\OB\" or "OB.exe") rather than as a
+        # substring inside unrelated words (e.g. "Job", "Mobile", "Global").
+        $cleanKw = $kw -replace '\*|\?', ''
+        if ($cleanKw.Length -lt 3 -and $kw -notmatch '\*|\?') {
+            $regexPatterns += "\b$basePattern\b"
+        } else {
+            $regexPatterns += $basePattern
+        }
     }
     $regexKeyword = "(" + ($regexPatterns -join '|') + ")"
 
