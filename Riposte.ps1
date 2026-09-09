@@ -1348,6 +1348,16 @@ function Invoke-GlobalHunt {
                     foreach ($ck in $cleanKeywords) {
                         if ($sd.Name -like "*$ck*") { $folderMatched = $true; break }
                     }
+                    # Also check EXACT folder name match against original (unfiltered) keywords -
+                    # this catches short but precise IOC folder names (e.g. "OB" for OneBrowser)
+                    # that the 3-char minimum above would otherwise skip. Exact match only, no
+                    # substring, to avoid noise from short keywords.
+                    if (-not $folderMatched) {
+                        foreach ($origKw in $keywords) {
+                            $origClean = $origKw -replace '\*', ''
+                            if ($origClean -and $sd.Name -ieq $origClean) { $folderMatched = $true; break }
+                        }
+                    }
                     if ($folderMatched -and $sd.Name -match $regexPattern) {
                         $seenFilePaths.Add($sd.FullName) | Out-Null
                         $fsMatchCount++
