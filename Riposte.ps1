@@ -396,13 +396,19 @@ function Get-FileLockHolders {
     param([string]$filePath)
     $holders = [System.Collections.Generic.List[PSCustomObject]]::new()
     $fileName = [System.IO.Path]::GetFileName($filePath)
+    $isFolder = Test-Path $filePath -PathType Container
     $allProcs = Get-CimInstance Win32_Process -ErrorAction SilentlyContinue
 
     foreach ($proc in $allProcs) {
         $matched = $false
 
-        # Check executable path exact match
+        # Check executable path exact match (file case)
         if ($proc.ExecutablePath -and $proc.ExecutablePath -eq $filePath) { $matched = $true }
+
+        # Check if the process is running from inside the target folder (folder case)
+        if (-not $matched -and $isFolder -and $proc.ExecutablePath) {
+            if ($proc.ExecutablePath -like "$filePath\*") { $matched = $true }
+        }
 
         # Check if process is loading this as a DLL/module
         if (-not $matched -and $proc.ProcessId -gt 0) {
@@ -411,6 +417,7 @@ function Get-FileLockHolders {
                 if ($psProc -and $psProc.Modules) {
                     foreach ($mod in $psProc.Modules) {
                         if ($mod.FileName -ieq $filePath) { $matched = $true; break }
+                        if ($isFolder -and $mod.FileName -like "$filePath\*") { $matched = $true; break }
                     }
                 }
             } catch {}
@@ -433,10 +440,15 @@ function Get-FileLockHolders {
         }
     }
 
-    # Also check services whose binary path contains the file
+    # Also check services whose binary path contains the file or is inside the target folder
     try {
         $services = Get-CimInstance Win32_Service -ErrorAction SilentlyContinue |
-            Where-Object { $_.PathName -and $_.PathName -like "*$fileName*" -and $_.State -eq 'Running' }
+            Where-Object {
+                $_.PathName -and $_.State -eq 'Running' -and (
+                    ($_.PathName -like "*$fileName*") -or
+                    ($isFolder -and $_.PathName -like "*$filePath*")
+                )
+            }
         foreach ($svc in $services) {
             $alreadyAdded = $holders | Where-Object { $_.ServiceName -eq $svc.Name }
             if (-not $alreadyAdded) {
@@ -1310,6 +1322,31 @@ function Invoke-GlobalHunt {
             $subDirs = Get-ChildItem -Path $currentPath -Directory -Force -ErrorAction SilentlyContinue
             foreach ($sd in $subDirs) {
                 if ($sd.Attributes -match "ReparsePoint") { continue }
+
+                # Check if folder name itself matches any keyword (e.g. "Web Companion" as a folder)
+                if (-not $seenFilePaths.Contains($sd.FullName)) {
+                    $folderMatched = $false
+                    foreach ($ck in $cleanKeywords) {
+                        if ($sd.Name -like "*$ck*") { $folderMatched = $true; break }
+                    }
+                    if ($folderMatched -and $sd.Name -match $regexPattern) {
+                        $seenFilePaths.Add($sd.FullName) | Out-Null
+                        $fsMatchCount++
+                        $associatedUser = Get-AssociatedUser -path $sd.FullName
+                        $globalResults.Add([PSCustomObject]@{
+                            Type            = "Folder Name Match"
+                            User            = $associatedUser
+                            Timestamp       = "Created: $($sd.CreationTime.ToString('yyyy-MM-dd HH:mm:ss')) | Modified: $($sd.LastWriteTime.ToString('yyyy-MM-dd HH:mm:ss'))"
+                            Name            = $sd.Name
+                            Value           = $sd.FullName
+                            SHA1            = "N/A"
+                            SHA256          = "N/A"
+                            RemediationType = "File"
+                            RemediationPath = $sd.FullName
+                        })
+                    }
+                }
+
                 $queue.Enqueue($sd.FullName)
             }
         }
