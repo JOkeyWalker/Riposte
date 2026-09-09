@@ -902,12 +902,15 @@ function Process-RemediationLoop {
         }
         
         $remediatedIndices = @()
+        $deletedFolders = @()
         foreach ($choice in $choices) {
             $selectedItem = $activeItems | Where-Object { $_.MenuIndex -eq $choice }
             if ($selectedItem) {
+                $wasFolder = ($selectedItem.RemediationType -eq "File") -and (Test-Path $selectedItem.RemediationPath -PathType Container -ErrorAction SilentlyContinue)
                 $success = Invoke-Remediation -item $selectedItem
                 if ($success) {
                     $remediatedIndices += $choice
+                    if ($wasFolder) { $deletedFolders += $selectedItem.RemediationPath }
                 }
             } else {
                 Write-Host "[-] Index [$choice] not found." -ForegroundColor Red
@@ -917,6 +920,22 @@ function Process-RemediationLoop {
         
         if ($remediatedIndices.Count -gt 0) {
             $activeItems = $activeItems | Where-Object { $_.MenuIndex -notin $remediatedIndices }
+        }
+
+        # If a folder was successfully deleted, drop any remaining results nested inside it
+        # (their paths are now guaranteed gone, so re-selecting them would only show "Path not found")
+        if ($deletedFolders.Count -gt 0) {
+            $staleCount = 0
+            foreach ($folder in $deletedFolders) {
+                $stale = $activeItems | Where-Object { $_.RemediationPath -and $_.RemediationPath -like "$folder\*" }
+                if ($stale) {
+                    $staleCount += @($stale).Count
+                    $activeItems = $activeItems | Where-Object { -not ($_.RemediationPath -and $_.RemediationPath -like "$folder\*") }
+                }
+            }
+            if ($staleCount -gt 0) {
+                Write-Host "  [+] Removed $staleCount stale result(s) nested inside deleted folder(s)." -ForegroundColor DarkGray
+            }
         }
     }
     
