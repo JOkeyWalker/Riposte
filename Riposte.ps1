@@ -487,22 +487,68 @@ function Invoke-Remediation {
         switch ($type) {
 
             "Registry" {
+                # If this path references an offline triage hive (S1_Triage_*) that was already
+                # unloaded after the scan completed, re-mount the correct user's NTUSER.DAT on
+                # demand so remediation can proceed, then unload it again afterward.
+                $reMountedHive = $null
+                if ($path -match '^HKU:\\(S1_Triage_(MRU_)?([^\\]+))\\') {
+                    $hiveName  = $Matches[1]
+                    $isMru     = [bool]$Matches[2]
+                    $userName  = $Matches[3]
+                    if (-not (Test-Path "HKU:\$hiveName")) {
+                        $profilePath = "C:\Users\$userName\NTUSER.DAT"
+                        if (Test-Path $profilePath) {
+                            reg.exe load "HKU\$hiveName" "$profilePath" 2>&1 | Out-Null
+                            if (Test-Path "HKU:\$hiveName") {
+                                $reMountedHive = $hiveName
+                                Write-Host "  [*] Re-mounted offline hive for $userName to complete remediation..." -ForegroundColor DarkGray
+                            } else {
+                                Write-Host "  [-] Could not re-mount offline hive for $userName (profile may be in use)." -ForegroundColor Red
+                                return $false
+                            }
+                        } else {
+                            Write-Host "  [-] NTUSER.DAT not found for $userName at $profilePath" -ForegroundColor Red
+                            return $false
+                        }
+                    }
+                }
+
+                $removeResult = $true
                 if (Test-Path $path) {
-                    Remove-Item -Path $path -Recurse -Force -ErrorAction Stop
-                    Write-Host "  [+] Registry key removed: $path" -ForegroundColor Green
+                    try {
+                        Remove-Item -Path $path -Recurse -Force -ErrorAction Stop
+                        Write-Host "  [+] Registry key removed: $path" -ForegroundColor Green
+                    } catch {
+                        Write-Host "  [-] Failed to remove registry key: $_" -ForegroundColor Red
+                        $removeResult = $false
+                    }
                 } else {
                     # Might be a value rather than a key  -  try parent key
                     $parent = Split-Path $path -Parent
                     $valueName = Split-Path $path -Leaf
                     if (Test-Path $parent) {
-                        Remove-ItemProperty -Path $parent -Name $valueName -Force -ErrorAction Stop
-                        Write-Host "  [+] Registry value removed: $valueName from $parent" -ForegroundColor Green
+                        try {
+                            Remove-ItemProperty -Path $parent -Name $valueName -Force -ErrorAction Stop
+                            Write-Host "  [+] Registry value removed: $valueName from $parent" -ForegroundColor Green
+                        } catch {
+                            Write-Host "  [-] Failed to remove registry value: $_" -ForegroundColor Red
+                            $removeResult = $false
+                        }
                     } else {
                         Write-Host "  [-] Registry path not found: $path" -ForegroundColor Red
-                        return $false
+                        $removeResult = $false
                     }
                 }
-                return $true
+
+                # Unload the hive again if we re-mounted it, so we don't leave it locked
+                if ($reMountedHive) {
+                    [GC]::Collect()
+                    [GC]::WaitForPendingFinalizers()
+                    Start-Sleep -Milliseconds 300
+                    reg.exe unload "HKU\$reMountedHive" 2>&1 | Out-Null
+                }
+
+                return $removeResult
             }
 
             "Task" {
@@ -2715,6 +2761,7 @@ function Get-RMMHunt {
         @{ Name = "Action1";              Exes = @("action1_agent.exe","action1_remote.exe");                                  Services = @("Action1 Agent");                             RegKeys = @("Action1");                    Paths = @("$env:ProgramFiles\Action1") },
         @{ Name = "Pulseway";             Exes = @("pulseway.exe","pcmonitor.exe");                                            Services = @("Pulseway","PCMonitor");                      RegKeys = @("Pulseway","MMSOFT Design");   Paths = @("$env:ProgramFiles\Pulseway") },
         @{ Name = "N-able N-sight";       Exes = @("winagent.exe","wr_system_monitor.exe");                                    Services = @("Windows Agent","Advanced Monitoring Agent"); RegKeys = @("Advanced Monitoring Agent");  Paths = @("$env:ProgramFiles\Advanced Monitoring Agent") },
+        @{ Name = "N-able Take Control";  Exes = @("basupsrvc.exe","basupapp.exe","bomgar-scc.exe","bomgar-pac.exe");            Services = @("BASupportExpressSrvcU","Bomgar Remote Support");      RegKeys = @("Bomgar","Take Control","N-able Take Control"); Paths = @("$env:ProgramFiles\Bomgar","${env:ProgramFiles(x86)}\Bomgar","$env:ProgramFiles\N-able Technologies\Take Control") },
         @{ Name = "Zoho Assist";          Exes = @("zohoassist.exe","zaservice.exe");                                          Services = @("ZohoAssistService","Zoho Assist Unattended Agent"); RegKeys = @("Zoho Assist");       Paths = @("$env:ProgramFiles\ZohoAssist") },
         @{ Name = "Cloudflare Tunnel";    Exes = @("cloudflared.exe");                                                         Services = @("Cloudflared");                               RegKeys = @("Cloudflare");                 Paths = @("$env:ProgramFiles\Cloudflare","$env:APPDATA\cloudflared") },
         @{ Name = "TacticalRMM";          Exes = @("tacticalrmm.exe");                                                         Services = @("tacticalrmm","Mesh Agent");                  RegKeys = @("TacticalRMM");               Paths = @("$env:ProgramFiles\TacticalRMM") },
@@ -2991,7 +3038,7 @@ function Get-RMMHunt {
                         'LogMeIn'     = @('logmein','goto','lmi')
                         'Kaseya'      = @('kaseya','vorex')
                         'Datto'       = @('datto','centrastage')
-                        'N-able'      = @('n-able','ncentral','solarwinds','advanced monitoring')
+                        'N-able'      = @('n-able','ncentral','solarwinds','advanced monitoring','bomgar','take control')
                         'NinjaRMM'    = @('ninja','ninjarmm','ninjaone')
                         'Atera'       = @('atera')
                         'Zoho'        = @('zoho')
