@@ -795,7 +795,9 @@ function Process-RemediationLoop {
         [array]$items,
         [string]$title,
         [switch]$showSCOption,
-        [switch]$noRemediation
+        [switch]$noRemediation,
+        [switch]$showEventLogOption,
+        [int]$eventLogCount = 0
     )
     
     $activeItems = $items
@@ -986,6 +988,9 @@ function Process-RemediationLoop {
         if ($showSCOption) {
             Write-Host "  [S]  View ScreenConnect Session History" -ForegroundColor Cyan
         }
+        if ($showEventLogOption) {
+            Write-Host "  [E]  View Related Event Log Matches ($eventLogCount found)" -ForegroundColor Cyan
+        }
         if ($noRemediation) {
             Write-Host "  [R]  Return to Menu" -ForegroundColor Cyan
         } else {
@@ -1002,6 +1007,11 @@ function Process-RemediationLoop {
         if ($showSCOption -and ($remedChoice -eq 'S' -or $remedChoice -eq 's')) {
             $loop = $false
             return 'SC_HISTORY'
+        }
+
+        if ($showEventLogOption -and ($remedChoice -eq 'E' -or $remedChoice -eq 'e')) {
+            $loop = $false
+            return 'VIEW_EVENT_LOGS'
         }
         
         if ($usePaging -and ($remedChoice -eq 'N' -or $remedChoice -eq 'n')) {
@@ -1721,8 +1731,20 @@ function Invoke-GlobalHunt {
         }
     }
 
-    if ($globalResults.Count -gt 0) {
-        Process-RemediationLoop -items $globalResults -title "GLOBAL HUNT RESULTS FOR: $($keywords -join ', ')"
+    # Separate event log results from primary hunt results - event logs tend to be numerous/noisy
+    # and are better reviewed on their own page rather than mixed with file/registry/service hits.
+    $eventLogResults = $globalResults | Where-Object { $_.Type -like "Event Log:*" }
+    $primaryResults  = $globalResults | Where-Object { $_.Type -notlike "Event Log:*" }
+
+    if ($primaryResults.Count -gt 0) {
+        $loopResult = Process-RemediationLoop -items $primaryResults -title "GLOBAL HUNT RESULTS FOR: $($keywords -join ', ')" -showEventLogOption ($eventLogResults.Count -gt 0) -eventLogCount $eventLogResults.Count
+
+        if ($loopResult -eq 'VIEW_EVENT_LOGS') {
+            Process-RemediationLoop -items $eventLogResults -title "EVENT LOG MATCHES FOR: $($keywords -join ', ')" -noRemediation
+        }
+    } elseif ($eventLogResults.Count -gt 0) {
+        # No primary results, but event log matches exist - show those directly
+        Process-RemediationLoop -items $eventLogResults -title "EVENT LOG MATCHES FOR: $($keywords -join ', ')" -noRemediation
     } else {
         Write-Host "`n[-] No matches found across any system vectors." -ForegroundColor Red
         Pause
