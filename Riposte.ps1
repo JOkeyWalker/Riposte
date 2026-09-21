@@ -592,6 +592,78 @@ function Invoke-Remediation {
                 return $true
             }
 
+            "Uninstall" {
+                # If this path references an offline app-scan hive (S1_Apps_*) that was already
+                # unloaded after the scan completed, re-mount the correct user's NTUSER.DAT on
+                # demand so remediation can proceed, then unload it again afterward.
+                $reMountedAppHive = $null
+                if ($path -match 'HKU:\\(S1_Apps_([^\\]+))\\') {
+                    $hiveName = $Matches[1]
+                    $userName = $Matches[2]
+                    if (-not (Test-Path "HKU:\$hiveName")) {
+                        $profilePath = "C:\Users\$userName\NTUSER.DAT"
+                        if (Test-Path $profilePath) {
+                            reg.exe load "HKU\$hiveName" "$profilePath" 2>&1 | Out-Null
+                            if (Test-Path "HKU:\$hiveName") {
+                                $reMountedAppHive = $hiveName
+                                Write-Host "  [*] Re-mounted offline hive for $userName to complete remediation..." -ForegroundColor DarkGray
+                            } else {
+                                Write-Host "  [-] Could not re-mount offline hive for $userName (profile may be in use)." -ForegroundColor Red
+                                return $false
+                            }
+                        } else {
+                            Write-Host "  [-] NTUSER.DAT not found for $userName at $profilePath" -ForegroundColor Red
+                            return $false
+                        }
+                    }
+                }
+
+                # RemediationPath is the full registry path to the uninstall key (e.g. HKLM:\...\Uninstall\{GUID})
+                $uninstallResult = $true
+                if (-not (Test-Path $path)) {
+                    Write-Host "  [-] Uninstall registry key not found: $path" -ForegroundColor Red
+                    $uninstallResult = $false
+                } else {
+                    $appInfo = Get-ItemProperty -Path $path -ErrorAction SilentlyContinue
+                    $uninstallStr = $appInfo.QuietUninstallString
+                    if (-not $uninstallStr) { $uninstallStr = $appInfo.UninstallString }
+
+                    if (-not $uninstallStr) {
+                        Write-Host "  [-] No uninstall command found for this application. Manual removal required." -ForegroundColor Red
+                        Write-Host "      Registry entry remains at: $path" -ForegroundColor DarkGray
+                        $uninstallResult = $false
+                    } else {
+                        Write-Host "  [*] Running uninstaller: $uninstallStr" -ForegroundColor DarkGray
+                        try {
+                            if ($uninstallStr -match '^"?([^"]+\.exe)"?\s*(.*)$') {
+                                $exePath = $Matches[1]
+                                $exeArgs = $Matches[2]
+                                if ($exePath -match '(?i)msiexec' -and $exeArgs -notmatch '(?i)/q') {
+                                    $exeArgs = "$exeArgs /qn"
+                                }
+                                Start-Process -FilePath $exePath -ArgumentList $exeArgs -Wait -WindowStyle Hidden -ErrorAction Stop
+                            } else {
+                                Invoke-Expression $uninstallStr
+                            }
+                            Write-Host "  [+] Uninstaller completed for: $($appInfo.DisplayName)" -ForegroundColor Green
+                        } catch {
+                            Write-Host "  [-] Uninstaller failed to run: $_" -ForegroundColor Red
+                            $uninstallResult = $false
+                        }
+                    }
+                }
+
+                # Unload the hive again if we re-mounted it
+                if ($reMountedAppHive) {
+                    [GC]::Collect()
+                    [GC]::WaitForPendingFinalizers()
+                    Start-Sleep -Milliseconds 300
+                    reg.exe unload "HKU\$reMountedAppHive" 2>&1 | Out-Null
+                }
+
+                return $uninstallResult
+            }
+
             "File" {
                 if (-not (Test-Path $path)) {
                     Write-Host "  [-] Path not found: $path" -ForegroundColor Red
@@ -855,6 +927,14 @@ function Process-RemediationLoop {
                         Write-Host "       $($item.Value)" -ForegroundColor Green
                     } elseif ($typeGroup.Name -match "Scheduled Task|Service|Process|WMI|RunMRU") {
                         Write-Host "       Action    : $($item.Value)" -ForegroundColor Green
+                    } elseif ($typeGroup.Name -eq "Installed Program Match") {
+                        $ipParts = $item.Value -split '\|'
+                        foreach ($seg in $ipParts) {
+                            if ($seg -match '^([^:]+):\s*(.*)$') {
+                                Write-Host "       $($Matches[1].Trim().PadRight(10)): " -NoNewline -ForegroundColor White
+                                Write-Host $Matches[2].Trim() -ForegroundColor Green
+                            }
+                        }
                     } elseif ($typeGroup.Name -like "RMM:*" -and $item.Value -match '\| Instance ID: ') {
                         # Prefetch evidence - split path, instance ID, and note into separately colored segments
                         $pfParts = $item.Value -split '\s*\|\s*'
@@ -1303,7 +1383,83 @@ function Invoke-GlobalHunt {
         }
     }
 
-    # --- 4. OPTIMIZED FILE SYSTEM HUNT ---
+    # --- 4. INSTALLED PROGRAMS HUNT ---
+    Write-Host "[*] Scanning Installed Programs..." -ForegroundColor Yellow
+    $uninstallKeys = @(
+        "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\*",
+        "HKLM:\SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall\*"
+    )
+    # Per-user installs for currently loaded/live hives
+    $loadedSidsForApps = @()
+    Get-ChildItem HKU: -ErrorAction SilentlyContinue | Where-Object { $_.PSChildName -match '^S-1-' -and $_.PSChildName -notmatch '_Classes$' } | ForEach-Object {
+        $loadedSidsForApps += $_.PSChildName
+        $uninstallKeys += "HKU:\$($_.PSChildName)\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\*"
+    }
+
+    # Per-user installs for OFFLINE (logged-off) users - mount their NTUSER.DAT temporarily
+    $offlineAppHives = @()
+    try {
+        Get-ChildItem "C:\Users" -Directory -ErrorAction SilentlyContinue | Where-Object { $_.Name -notmatch '^(Public|Default|Default User|All Users)$' } | ForEach-Object {
+            $profileName = $_.Name
+            # Skip if this user's SID is already covered by a loaded hive
+            $alreadyLoaded = $false
+            foreach ($sid in $loadedSidsForApps) {
+                $pp = (Get-ItemProperty "HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\ProfileList\$sid" -Name ProfileImagePath -ErrorAction SilentlyContinue).ProfileImagePath
+                if ($pp -and $pp -like "*\$profileName") { $alreadyLoaded = $true }
+            }
+            if ($alreadyLoaded) { return }
+
+            $ntuserPath = Join-Path $_.FullName "NTUSER.DAT"
+            if (-not (Test-Path $ntuserPath)) { return }
+            $tempHiveName = "S1_Apps_$profileName"
+            if (Test-Path "HKU:\$tempHiveName") { return }
+            reg.exe load "HKU\$tempHiveName" "$ntuserPath" 2>&1 | Out-Null
+            if (Test-Path "HKU:\$tempHiveName") {
+                $offlineAppHives += $tempHiveName
+                $uninstallKeys += "HKU:\$tempHiveName\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\*"
+            }
+        }
+    } catch {}
+
+    foreach ($ukPath in $uninstallKeys) {
+        Get-ItemProperty -Path $ukPath -ErrorAction SilentlyContinue | ForEach-Object {
+            $appEntry = $_
+            if (-not $appEntry.DisplayName) { return }
+            if ($appEntry.DisplayName -match $regexPattern -or $appEntry.Publisher -match $regexPattern -or $appEntry.InstallLocation -match $regexPattern) {
+                $installDate = if ($appEntry.InstallDate -and $appEntry.InstallDate -match '^\d{8}$') {
+                    try { [datetime]::ParseExact($appEntry.InstallDate, "yyyyMMdd", $null).ToString("yyyy-MM-dd") } catch { $appEntry.InstallDate }
+                } else { "Unknown" }
+
+                $ownerLabel = if ($appEntry.PSPath -match 'HKU:\\(S1_Apps_[^\\]+)\\') {
+                    "$($Matches[1] -replace '^S1_Apps_','') (Offline)"
+                } elseif ($appEntry.PSPath -match 'HKU:\\(S-1-[0-9\-]+)\\') {
+                    Resolve-SidToUsername -sid $Matches[1]
+                } else {
+                    "All Users (Machine-wide)"
+                }
+
+                $globalResults.Add([PSCustomObject]@{
+                    Type            = "Installed Program Match"
+                    User            = $ownerLabel
+                    Timestamp       = "Installed: $installDate"
+                    Name            = $appEntry.DisplayName
+                    Value           = "Publisher: $($appEntry.Publisher) | Location: $($appEntry.InstallLocation)"
+                    SHA1            = "N/A"
+                    SHA256          = "N/A"
+                    RemediationType = "Uninstall"
+                    RemediationPath = $appEntry.PSPath
+                })
+            }
+        }
+    }
+
+    # Unload any offline hives we mounted just for this scan - remediation will re-mount on demand if needed
+    foreach ($hive in $offlineAppHives) {
+        [GC]::Collect(); [GC]::WaitForPendingFinalizers(); Start-Sleep -Milliseconds 200
+        reg.exe unload "HKU\$hive" 2>&1 | Out-Null
+    }
+
+    # --- 5. OPTIMIZED FILE SYSTEM HUNT ---
     $searchPaths = @()
     if ($pathInput) {
         if ($pathInput -eq "C:\Users" -or $pathInput -eq "C:\Users\") {
@@ -1436,7 +1592,7 @@ function Invoke-GlobalHunt {
         }
     }
 
-    # --- 5. RUNNING PROCESS HUNT ---
+    # --- 6. RUNNING PROCESS HUNT ---
     Write-Host "[*] Scanning Running Processes..." -ForegroundColor Yellow
     try {
         $runningProcs = Get-CimInstance Win32_Process -ErrorAction SilentlyContinue
@@ -1476,7 +1632,7 @@ function Invoke-GlobalHunt {
         Write-Host "[-] Error scanning processes: $_" -ForegroundColor Red
     }
 
-    # --- 6. EVENT LOG HUNT ---
+    # --- 7. EVENT LOG HUNT ---
     Write-Host "[*] Scanning Event Logs (last 7 days)..." -ForegroundColor Yellow
 
     $logLookback = (Get-Date).AddDays(-7)
