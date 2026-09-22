@@ -2773,6 +2773,58 @@ function Get-RecentlyWrittenFiles {
         }
     }
 
+    # --- PROGRAM FILES - NEW FOLDERS/FILES CHECK ---
+    # Program Files is excluded from the recursive scan above (too noisy - every app update
+    # touches files there). Instead, do a shallow, targeted check: any NEW top-level folder or
+    # top-level file created within the timeframe is worth flagging, since that indicates a
+    # new application/payload was dropped rather than an existing one being updated.
+    Write-Host "[*] Checking Program Files for newly created folders/files..." -ForegroundColor DarkGray
+    foreach ($pfRoot in @("C:\Program Files", "C:\Program Files (x86)")) {
+        if (-not (Test-Path $pfRoot)) { continue }
+
+        # New top-level folders (new application installs)
+        Get-ChildItem $pfRoot -Directory -Force -ErrorAction SilentlyContinue | ForEach-Object {
+            if ($_.CreationTime -ge $startTime) {
+                $owner = Get-AssociatedUser -path $_.FullName
+                $matchCount++
+                $results += [PSCustomObject]@{
+                    Type            = "Recently Written File"
+                    User            = $owner
+                    Timestamp       = "Created: $($_.CreationTime.ToString('yyyy-MM-dd HH:mm:ss')) | Modified: $($_.LastWriteTime.ToString('yyyy-MM-dd HH:mm:ss'))"
+                    Name            = $_.Name
+                    Value           = "$($_.FullName)  [NEW FOLDER in Program Files]"
+                    SHA1            = "N/A"
+                    SHA256          = "N/A"
+                    RemediationType = "File"
+                    RemediationPath = $_.FullName
+                }
+            }
+        }
+
+        # New top-level files matching target extensions (dropped directly in Program Files root)
+        foreach ($ext in $targetExtensions) {
+            Get-ChildItem $pfRoot -Filter $ext -File -Force -ErrorAction SilentlyContinue | ForEach-Object {
+                if ($_.CreationTime -ge $startTime -or $_.LastWriteTime -ge $startTime) {
+                    if ($noisyExtensions -contains $_.Extension.ToLower()) { return }
+                    $owner = Get-AssociatedUser -path $_.FullName
+                    $hashes = Get-FileHashes -filePath $_.FullName
+                    $matchCount++
+                    $results += [PSCustomObject]@{
+                        Type            = "Recently Written File"
+                        User            = $owner
+                        Timestamp       = "Created: $($_.CreationTime.ToString('yyyy-MM-dd HH:mm:ss')) | Modified: $($_.LastWriteTime.ToString('yyyy-MM-dd HH:mm:ss'))"
+                        Name            = $_.Name
+                        Value           = "$($_.FullName)  [Dropped in Program Files root]"
+                        SHA1            = $hashes.SHA1
+                        SHA256          = $hashes.SHA256
+                        RemediationType = "File"
+                        RemediationPath = $_.FullName
+                    }
+                }
+            }
+        }
+    }
+
     if ($results.Count -gt 0) {
         Process-RemediationLoop -items $results -title "RECENTLY WRITTEN FILES (SINCE $($startTime.ToString('HH:mm:ss')))"
     } else {
