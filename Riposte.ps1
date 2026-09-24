@@ -2700,6 +2700,7 @@ function Get-RecentlyWrittenFiles {
     foreach ($ud in $userDirs) {
         $searchPaths += Join-Path $ud.FullName "Downloads"
         $searchPaths += Join-Path $ud.FullName "Desktop"
+        $searchPaths += Join-Path $ud.FullName "Documents"
         $searchPaths += Join-Path $ud.FullName "AppData\Local\Temp"
         $searchPaths += Join-Path $ud.FullName "AppData\Roaming\Microsoft\Windows\Start Menu\Programs\Startup"
 
@@ -2745,16 +2746,51 @@ function Get-RecentlyWrittenFiles {
             foreach ($ext in $targetExtensions) {
                 $files = Get-ChildItem -Path $currentPath -Filter $ext -File -Force -ErrorAction SilentlyContinue
                 foreach ($file in $files) {
-                    if ($file.LastWriteTime -ge $startTime -or $file.CreationTime -ge $startTime) {
-                        # Skip shortcut/url files - they are Windows artifacts, not threats
-                        if ($noisyExtensions -contains $file.Extension.ToLower()) { continue }
+                    if ($noisyExtensions -contains $file.Extension.ToLower()) { continue }
+
+                    $inTimeframe = ($file.LastWriteTime -ge $startTime -or $file.CreationTime -ge $startTime)
+
+                    # --- Timestomping-resistant anomaly checks (independent of timeframe) ---
+                    # These catch files whose timestamps were deliberately backdated by an
+                    # attacker to evade the timeframe filter above.
+                    $anomalyReason = $null
+
+                    # 1. Logical impossibility: a file cannot be "created" after it was "modified"
+                    #    for its very first write. If CreationTime is meaningfully later than
+                    #    LastWriteTime, someone rewrote one of the two timestamps.
+                    if ($file.CreationTime -gt $file.LastWriteTime.AddSeconds(2)) {
+                        $anomalyReason = "Timestamp anomaly: Created ($($file.CreationTime.ToString('yyyy-MM-dd HH:mm:ss'))) is AFTER Modified ($($file.LastWriteTime.ToString('yyyy-MM-dd HH:mm:ss'))) - likely timestomped"
+                    }
+
+                    # 2. Path-based: executables/DLLs sitting directly in Documents, or inside a
+                    #    randomly-named subfolder of Documents/AppData\Local - not a normal
+                    #    install location for legitimate software, regardless of file dates.
+                    if (-not $anomalyReason -and $file.Extension -match '(?i)^\.(exe|dll)$') {
+                        if ($currentPath -match '(?i)\\Documents(\\|$)') {
+                            $anomalyReason = "Suspicious location: $($file.Extension.TrimStart('.')) file directly under Documents - uncommon for legitimate software"
+                        } elseif ($currentPath -match '(?i)\\AppData\\Local\\[^\\]+\\?$') {
+                            $folderName = Split-Path $currentPath -Leaf
+                            # Flag folder names that look randomly generated (long alphanumeric/digit strings, no spaces/vendor-like naming)
+                            if ($folderName -match '^[A-Za-z0-9]{10,}$' -and $folderName -notmatch '(?i)microsoft|google|mozilla|adobe|nvidia|intel|amd\b') {
+                                $anomalyReason = "Suspicious location: $($file.Extension.TrimStart('.')) file in randomly-named AppData\Local folder ($folderName)"
+                            }
+                        }
+                    }
+
+                    if ($inTimeframe -or $anomalyReason) {
                         $owner = Get-AssociatedUser -path $file.FullName
                         $hashes = Get-FileHashes -filePath $file.FullName
                         $matchCount++
+                        $timestampLabel = "Created: $($file.CreationTime.ToString('yyyy-MM-dd HH:mm:ss')) | Modified: $($file.LastWriteTime.ToString('yyyy-MM-dd HH:mm:ss'))"
+                        if ($anomalyReason -and -not $inTimeframe) {
+                            $timestampLabel = "$timestampLabel | OUTSIDE TIMEFRAME - $anomalyReason"
+                        } elseif ($anomalyReason) {
+                            $timestampLabel = "$timestampLabel | $anomalyReason"
+                        }
                         $results += [PSCustomObject]@{
                             Type            = "Recently Written File"
                             User            = $owner
-                            Timestamp       = "Created: $($file.CreationTime.ToString('yyyy-MM-dd HH:mm:ss')) | Modified: $($file.LastWriteTime.ToString('yyyy-MM-dd HH:mm:ss'))"
+                            Timestamp       = $timestampLabel
                             Name            = $file.Name
                             Value           = $file.FullName
                             SHA1            = $hashes.SHA1
