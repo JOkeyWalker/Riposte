@@ -2729,6 +2729,33 @@ function Get-RecentlyWrittenFiles {
     $results = @()
     $dirCount = 0
     $matchCount = 0
+
+    # --- DOCUMENTS - NEW FOLDER CHECK ---
+    # A newly created folder in Documents is worth flagging on its own, even if it's empty or
+    # contains only files outside the target extension list (the main recursive scan below only
+    # reports matching files inside subfolders, not the folder's own creation).
+    foreach ($ud in $userDirs) {
+        $docsPath = Join-Path $ud.FullName "Documents"
+        if (-not (Test-Path $docsPath)) { continue }
+        Get-ChildItem $docsPath -Directory -Force -ErrorAction SilentlyContinue | ForEach-Object {
+            if ($_.CreationTime -ge $startTime -or $_.LastWriteTime -ge $startTime) {
+                $owner = Get-AssociatedUser -path $_.FullName
+                $matchCount++
+                $results += [PSCustomObject]@{
+                    Type            = "Recently Written File"
+                    User            = $owner
+                    Timestamp       = "Created: $($_.CreationTime.ToString('yyyy-MM-dd HH:mm:ss')) | Modified: $($_.LastWriteTime.ToString('yyyy-MM-dd HH:mm:ss'))"
+                    Name            = $_.Name
+                    Value           = "$($_.FullName)  [NEW FOLDER in Documents]"
+                    SHA1            = "N/A"
+                    SHA256          = "N/A"
+                    RemediationType = "File"
+                    RemediationPath = $_.FullName
+                }
+            }
+        }
+    }
+
     foreach ($path in $searchPaths) {
         if (-not (Test-Path $path)) { continue }
         
@@ -2746,51 +2773,16 @@ function Get-RecentlyWrittenFiles {
             foreach ($ext in $targetExtensions) {
                 $files = Get-ChildItem -Path $currentPath -Filter $ext -File -Force -ErrorAction SilentlyContinue
                 foreach ($file in $files) {
-                    if ($noisyExtensions -contains $file.Extension.ToLower()) { continue }
-
-                    $inTimeframe = ($file.LastWriteTime -ge $startTime -or $file.CreationTime -ge $startTime)
-
-                    # --- Timestomping-resistant anomaly checks (independent of timeframe) ---
-                    # These catch files whose timestamps were deliberately backdated by an
-                    # attacker to evade the timeframe filter above.
-                    $anomalyReason = $null
-
-                    # 1. Logical impossibility: a file cannot be "created" after it was "modified"
-                    #    for its very first write. If CreationTime is meaningfully later than
-                    #    LastWriteTime, someone rewrote one of the two timestamps.
-                    if ($file.CreationTime -gt $file.LastWriteTime.AddSeconds(2)) {
-                        $anomalyReason = "Timestamp anomaly: Created ($($file.CreationTime.ToString('yyyy-MM-dd HH:mm:ss'))) is AFTER Modified ($($file.LastWriteTime.ToString('yyyy-MM-dd HH:mm:ss'))) - likely timestomped"
-                    }
-
-                    # 2. Path-based: executables/DLLs sitting directly in Documents, or inside a
-                    #    randomly-named subfolder of Documents/AppData\Local - not a normal
-                    #    install location for legitimate software, regardless of file dates.
-                    if (-not $anomalyReason -and $file.Extension -match '(?i)^\.(exe|dll)$') {
-                        if ($currentPath -match '(?i)\\Documents(\\|$)') {
-                            $anomalyReason = "Suspicious location: $($file.Extension.TrimStart('.')) file directly under Documents - uncommon for legitimate software"
-                        } elseif ($currentPath -match '(?i)\\AppData\\Local\\[^\\]+\\?$') {
-                            $folderName = Split-Path $currentPath -Leaf
-                            # Flag folder names that look randomly generated (long alphanumeric/digit strings, no spaces/vendor-like naming)
-                            if ($folderName -match '^[A-Za-z0-9]{10,}$' -and $folderName -notmatch '(?i)microsoft|google|mozilla|adobe|nvidia|intel|amd\b') {
-                                $anomalyReason = "Suspicious location: $($file.Extension.TrimStart('.')) file in randomly-named AppData\Local folder ($folderName)"
-                            }
-                        }
-                    }
-
-                    if ($inTimeframe -or $anomalyReason) {
+                    if ($file.LastWriteTime -ge $startTime -or $file.CreationTime -ge $startTime) {
+                        # Skip shortcut/url files - they are Windows artifacts, not threats
+                        if ($noisyExtensions -contains $file.Extension.ToLower()) { continue }
                         $owner = Get-AssociatedUser -path $file.FullName
                         $hashes = Get-FileHashes -filePath $file.FullName
                         $matchCount++
-                        $timestampLabel = "Created: $($file.CreationTime.ToString('yyyy-MM-dd HH:mm:ss')) | Modified: $($file.LastWriteTime.ToString('yyyy-MM-dd HH:mm:ss'))"
-                        if ($anomalyReason -and -not $inTimeframe) {
-                            $timestampLabel = "$timestampLabel | OUTSIDE TIMEFRAME - $anomalyReason"
-                        } elseif ($anomalyReason) {
-                            $timestampLabel = "$timestampLabel | $anomalyReason"
-                        }
                         $results += [PSCustomObject]@{
                             Type            = "Recently Written File"
                             User            = $owner
-                            Timestamp       = $timestampLabel
+                            Timestamp       = "Created: $($file.CreationTime.ToString('yyyy-MM-dd HH:mm:ss')) | Modified: $($file.LastWriteTime.ToString('yyyy-MM-dd HH:mm:ss'))"
                             Name            = $file.Name
                             Value           = $file.FullName
                             SHA1            = $hashes.SHA1
