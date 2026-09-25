@@ -423,6 +423,13 @@ function Get-FileLockHolders {
             } catch {}
         }
 
+        # Check if the target file/folder appears in the process's command line arguments.
+        # This catches helper processes (msiexec.exe /i, rundll32.exe, regsvr32.exe, etc.) that
+        # hold a lock on a file passed to them as an argument rather than being the file itself.
+        if (-not $matched -and $proc.CommandLine) {
+            if ($proc.CommandLine -like "*$filePath*") { $matched = $true }
+        }
+
         if ($matched) {
             # Check if there is a service associated with this process
             $svcName = $null
