@@ -671,6 +671,50 @@ function Invoke-Remediation {
                 return $uninstallResult
             }
 
+            "Appx" {
+                # RemediationPath format: "PackageFullName|UserSID"
+                $parts = $path -split '\|', 2
+                $packageFullName = $parts[0]
+                $userSid = if ($parts.Count -gt 1) { $parts[1] } else { "" }
+
+                if (-not $packageFullName) {
+                    Write-Host "  [-] No package name provided for AppX removal." -ForegroundColor Red
+                    return $false
+                }
+
+                Write-Host "  [*] Removing AppX package: $packageFullName" -ForegroundColor DarkGray
+                try {
+                    if ($userSid) {
+                        Remove-AppxPackage -Package $packageFullName -User $userSid -ErrorAction Stop
+                        Write-Host "  [+] AppX package removed for user SID $userSid`: $packageFullName" -ForegroundColor Green
+                    } else {
+                        # No specific user resolved - attempt removal for all users with this package registered
+                        $allUserPkgs = Get-AppxPackage -AllUsers -ErrorAction SilentlyContinue | Where-Object { $_.PackageFullName -eq $packageFullName }
+                        if (-not $allUserPkgs) {
+                            Write-Host "  [-] Package not found: $packageFullName (may have already been removed)" -ForegroundColor Red
+                            return $false
+                        }
+                        $removedAny = $false
+                        foreach ($upkg in $allUserPkgs) {
+                            foreach ($userInfo in $upkg.PackageUserInformation) {
+                                try {
+                                    Remove-AppxPackage -Package $packageFullName -User $userInfo.UserSecurityId.Sid -ErrorAction Stop
+                                    Write-Host "  [+] AppX package removed for $($userInfo.UserSecurityId.Sid): $packageFullName" -ForegroundColor Green
+                                    $removedAny = $true
+                                } catch {
+                                    Write-Host "  [-] Failed to remove for $($userInfo.UserSecurityId.Sid): $_" -ForegroundColor Red
+                                }
+                            }
+                        }
+                        if (-not $removedAny) { return $false }
+                    }
+                } catch {
+                    Write-Host "  [-] AppX removal failed: $_" -ForegroundColor Red
+                    return $false
+                }
+                return $true
+            }
+
             "File" {
                 if (-not (Test-Path $path)) {
                     Write-Host "  [-] Path not found: $path" -ForegroundColor Red
@@ -936,7 +980,7 @@ function Process-RemediationLoop {
                         Write-Host "       $($item.Value)" -ForegroundColor Green
                     } elseif ($typeGroup.Name -match "Scheduled Task|Service|Process|WMI|RunMRU") {
                         Write-Host "       Action    : $($item.Value)" -ForegroundColor Green
-                    } elseif ($typeGroup.Name -eq "Installed Program Match") {
+                    } elseif ($typeGroup.Name -eq "Installed Program Match" -or $typeGroup.Name -eq "AppX Package Match") {
                         $ipParts = $item.Value -split '\|'
                         foreach ($seg in $ipParts) {
                             if ($seg -match '^([^:]+):\s*(.*)$') {
@@ -1474,6 +1518,44 @@ function Invoke-GlobalHunt {
     foreach ($hive in $offlineAppHives) {
         [GC]::Collect(); [GC]::WaitForPendingFinalizers(); Start-Sleep -Milliseconds 200
         reg.exe unload "HKU\$hive" 2>&1 | Out-Null
+    }
+
+    # --- 4b. APPX PACKAGE HUNT (Modern/UWP Apps) ---
+    # AppX packages (modern/UWP apps) are NOT covered by the classic Uninstall registry keys
+    # above - they live in a separate per-user package repository, so they need their own check.
+    Write-Host "[*] Scanning AppX/UWP Packages..." -ForegroundColor Yellow
+    try {
+        Get-AppxPackage -AllUsers -ErrorAction SilentlyContinue | ForEach-Object {
+            $pkg = $_
+            if ($pkg.Name -match $regexPattern -or $pkg.PackageFullName -match $regexPattern -or $pkg.Publisher -match $regexPattern) {
+                $installDate = try {
+                    (Get-Item $pkg.InstallLocation -ErrorAction Stop).CreationTime.ToString("yyyy-MM-dd HH:mm:ss")
+                } catch { "Unknown" }
+
+                # Resolve which user(s) this package is actually registered to via the per-user
+                # provisioning list, since -AllUsers only shows what's present, not who owns it
+                $ownerSid = $null
+                try {
+                    $userPkg = Get-AppxPackage -User $pkg.PackageUserInformation[0].UserSecurityId.Sid -Name $pkg.Name -ErrorAction SilentlyContinue
+                    if ($userPkg) { $ownerSid = $pkg.PackageUserInformation[0].UserSecurityId.Sid }
+                } catch {}
+                $ownerLabel = if ($ownerSid) { Resolve-SidToUsername -sid $ownerSid } else { "Unknown User" }
+
+                $globalResults.Add([PSCustomObject]@{
+                    Type            = "AppX Package Match"
+                    User            = $ownerLabel
+                    Timestamp       = "Install location created: $installDate"
+                    Name            = $pkg.Name
+                    Value           = "Publisher: $($pkg.Publisher) | Version: $($pkg.Version) | Location: $($pkg.InstallLocation)"
+                    SHA1            = "N/A"
+                    SHA256          = "N/A"
+                    RemediationType = "Appx"
+                    RemediationPath = "$($pkg.PackageFullName)|$ownerSid"
+                })
+            }
+        }
+    } catch {
+        Write-Host "[-] Error scanning AppX packages: $_" -ForegroundColor Red
     }
 
     # --- 5. OPTIMIZED FILE SYSTEM HUNT ---
