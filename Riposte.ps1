@@ -1823,11 +1823,22 @@ function Invoke-GlobalHunt {
 
     # Separate event log results from primary hunt results - event logs tend to be numerous/noisy
     # and are better reviewed on their own page rather than mixed with file/registry/service hits.
-    $eventLogResults = $globalResults | Where-Object { $_.Type -like "Event Log:*" }
-    $primaryResults  = $globalResults | Where-Object { $_.Type -notlike "Event Log:*" }
+    $eventLogResults = @($globalResults | Where-Object { $_.Type -like "Event Log:*" })
+    $unorderedPrimary = @($globalResults | Where-Object { $_.Type -notlike "Event Log:*" })
+
+    # Folder matches are discovered during directory traversal, so they can land before or after
+    # file matches depending on scan order. Always show Folder Name Match first (files found are
+    # usually children of those folders), then keep every other category contiguous in the order
+    # it was first found. Built manually rather than with Sort-Object, which isn't guaranteed
+    # stable in Windows PowerShell 5.1.
+    $primaryResults = [System.Collections.Generic.List[PSCustomObject]]::new()
+    foreach ($r in $unorderedPrimary) { if ($r.Type -eq "Folder Name Match") { $primaryResults.Add($r) } }
+    foreach ($grp in ($unorderedPrimary | Where-Object { $_.Type -ne "Folder Name Match" } | Group-Object Type)) {
+        foreach ($r in $grp.Group) { $primaryResults.Add($r) }
+    }
 
     if ($primaryResults.Count -gt 0) {
-        $loopResult = Process-RemediationLoop -items $primaryResults -title "GLOBAL HUNT RESULTS FOR: $($keywords -join ', ')" -showEventLogOption ($eventLogResults.Count -gt 0) -eventLogCount $eventLogResults.Count
+        $loopResult = Process-RemediationLoop -items $primaryResults -title "GLOBAL HUNT RESULTS FOR: $($keywords -join ', ')" -showEventLogOption:($eventLogResults.Count -gt 0) -eventLogCount $eventLogResults.Count
 
         if ($loopResult -eq 'VIEW_EVENT_LOGS') {
             Process-RemediationLoop -items $eventLogResults -title "EVENT LOG MATCHES FOR: $($keywords -join ', ')" -noRemediation
