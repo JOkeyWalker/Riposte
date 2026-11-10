@@ -3580,14 +3580,19 @@ function Get-RMMHunt {
                 Write-Host "===============================================================" -ForegroundColor DarkCyan
                 Write-Host "[*] Querying ScreenConnect event provider..." -ForegroundColor DarkGray
 
+                # Query the Application log directly and match ScreenConnect by provider name, rather
+                # than using Get-WinEvent -ProviderName. -ProviderName only works for clients that are
+                # still registered, so history from uninstalled/removed clients would be missed, and a
+                # single broken registration (e.g. a sloppily removed rogue client) made the whole
+                # query fail and return nothing.
                 $scEvents = $null
                 try {
-                    $scEvents = Get-WinEvent -ProviderName "*ScreenConnect*" -ErrorAction Stop |
+                    $scEvents = @(Get-WinEvent -FilterHashtable @{ LogName = 'Application'; StartTime = (Get-Date).AddDays(-30) } -ErrorAction Stop |
                         Where-Object {
-                            -not ($_.Message -like "*SocketException*") -and
+                            $_.ProviderName -like "*ScreenConnect*" -and
                             $_.Id -ne 20 -and
-                            $_.TimeCreated -ge (Get-Date).AddDays(-30)
-                        } | Sort-Object TimeCreated -Descending
+                            -not ($_.Message -like "*SocketException*")
+                        } | Sort-Object TimeCreated -Descending)
                 } catch {}
 
                 if (-not $scEvents -or $scEvents.Count -eq 0) {
@@ -3604,6 +3609,15 @@ function Get-RMMHunt {
                 foreach ($evt in $scEvents) {
                     $msg = $evt.Message
 
+                    # If the client that wrote this event has been uninstalled, Windows can no longer
+                    # render the message text. Fall back to the raw event data so the entry still shows.
+                    $providerGone = $false
+                    if (-not $msg -or $msg -match 'description for Event ID .* cannot be found') {
+                        $providerGone = $true
+                        $msg = (@($evt.Properties | ForEach-Object { $_.Value }) | Where-Object { "$_".Trim() }) -join "`n"
+                        if (-not $msg) { $msg = "(no event data)" }
+                    }
+
                     # Split message into clean lines
                     $msgLines = $msg -split "`r?`n" | Where-Object { $_.Trim() -ne "" } | ForEach-Object { $_.Trim() }
 
@@ -3619,6 +3633,11 @@ function Get-RMMHunt {
                     foreach ($line in $msgLines) {
                         if ($line -match "^Executable Path:\s*(.+)$") { $scExe = $Matches[1].Trim() }
                         if ($line -match "^Relay Server:\s*(.+)$") { $scRelay = $Matches[1].Trim().TrimEnd("/") }
+                    }
+
+                    # Client no longer installed: identify the instance from the provider name instead
+                    if ($providerGone -and $scExe -eq "-") {
+                        $scExe = "$($evt.ProviderName) [client no longer installed]"
                     }
 
                     $displayValue = "SC:$firstLine|EXE:$scExe|RELAY:$scRelay"
