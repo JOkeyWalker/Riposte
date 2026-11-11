@@ -3578,7 +3578,7 @@ function Get-RMMHunt {
                 Write-Host "===============================================================" -ForegroundColor DarkCyan
                 Write-Host "  SCREENCONNECT SESSION HISTORY  |  Last 30 Days" -ForegroundColor Yellow
                 Write-Host "===============================================================" -ForegroundColor DarkCyan
-                Write-Host "[*] Querying ScreenConnect event provider..." -ForegroundColor DarkGray
+                Write-Host "[*] Searching Application log for ScreenConnect events (all clients, incl. removed)..." -ForegroundColor DarkGray
 
                 # Query the Application log directly and match ScreenConnect by provider name, rather
                 # than using Get-WinEvent -ProviderName. -ProviderName only works for clients that are
@@ -3597,7 +3597,23 @@ function Get-RMMHunt {
 
                 if (-not $scEvents -or $scEvents.Count -eq 0) {
                     Write-Host "[-] No ScreenConnect event log activity found in the last 30 days." -ForegroundColor Red
-                    Write-Host "    ScreenConnect may not write to Windows Event Log on this endpoint." -ForegroundColor DarkGray
+
+                    # Diagnostics - help tell a genuine "no activity" apart from a rolled-over log
+                    $oldestApp = $null
+                    try { $oldestApp = (Get-WinEvent -LogName Application -MaxEvents 1 -Oldest -ErrorAction Stop).TimeCreated } catch {}
+                    if ($oldestApp) {
+                        Write-Host "    Application log goes back to: $($oldestApp.ToString('yyyy-MM-dd HH:mm:ss'))" -ForegroundColor DarkGray
+                        if ($oldestApp -gt (Get-Date).AddDays(-30)) {
+                            Write-Host "    [!] Log has rolled over - it holds less than 30 days, so older activity may be gone." -ForegroundColor Yellow
+                        }
+                    }
+                    $scProviders = @(Get-WinEvent -ListProvider "*ScreenConnect*" -ErrorAction SilentlyContinue)
+                    Write-Host "    Registered ScreenConnect event sources: $($scProviders.Count)" -ForegroundColor DarkGray
+                    if ($scProviders.Count -eq 0) {
+                        Write-Host "    No ScreenConnect client is registered to log events here (none installed, or all removed)." -ForegroundColor DarkGray
+                    } else {
+                        Write-Host "    A client is registered but logged nothing in the retained window - likely no remote sessions took place." -ForegroundColor DarkGray
+                    }
                     Pause
                     return
                 }
