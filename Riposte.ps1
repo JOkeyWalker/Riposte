@@ -904,7 +904,8 @@ function Process-RemediationLoop {
             
             $groupedByUser = $typeGroup.Group | Group-Object User
             foreach ($userGroup in $groupedByUser) {
-                Write-Host "`n  [+] User/Context: $($userGroup.Name)" -ForegroundColor Magenta
+                Write-Host "`n  [+] User/Context: " -NoNewline -ForegroundColor White
+                Write-Host "$($userGroup.Name)" -ForegroundColor Cyan
                 Write-Host "  ---------------------------------------------------" -ForegroundColor DarkGray
                 
                 foreach ($item in $userGroup.Group) {
@@ -3574,9 +3575,12 @@ function Get-RMMHunt {
         $loopResult = Process-RemediationLoop @loopParams
 
         if ($loopResult -eq 'SC_HISTORY') {
+                # How far back Session History looks. The Application log often rolls over before this,
+                # in which case the rollover warning below tells you how far back it actually reaches.
+                $scHistoryDays = 60
                 Show-Banner
                 Write-Host "===============================================================" -ForegroundColor DarkCyan
-                Write-Host "  SCREENCONNECT SESSION HISTORY  |  Last 30 Days" -ForegroundColor Yellow
+                Write-Host "  SCREENCONNECT SESSION HISTORY  |  Last $scHistoryDays Days" -ForegroundColor Yellow
                 Write-Host "===============================================================" -ForegroundColor DarkCyan
                 Write-Host "[*] Searching Application log for ScreenConnect events (all clients, incl. removed)..." -ForegroundColor DarkGray
 
@@ -3587,7 +3591,7 @@ function Get-RMMHunt {
                 # query fail and return nothing.
                 $scEvents = $null
                 try {
-                    $scEvents = @(Get-WinEvent -FilterHashtable @{ LogName = 'Application'; StartTime = (Get-Date).AddDays(-30) } -ErrorAction Stop |
+                    $scEvents = @(Get-WinEvent -FilterHashtable @{ LogName = 'Application'; StartTime = (Get-Date).AddDays(-$scHistoryDays) } -ErrorAction Stop |
                         Where-Object {
                             $_.ProviderName -like "*ScreenConnect*" -and
                             $_.Id -ne 20 -and
@@ -3596,15 +3600,15 @@ function Get-RMMHunt {
                 } catch {}
 
                 if (-not $scEvents -or $scEvents.Count -eq 0) {
-                    Write-Host "[-] No ScreenConnect event log activity found in the last 30 days." -ForegroundColor Red
+                    Write-Host "[-] No ScreenConnect event log activity found in the last $scHistoryDays days." -ForegroundColor Red
 
                     # Diagnostics - help tell a genuine "no activity" apart from a rolled-over log
                     $oldestApp = $null
                     try { $oldestApp = (Get-WinEvent -LogName Application -MaxEvents 1 -Oldest -ErrorAction Stop).TimeCreated } catch {}
                     if ($oldestApp) {
                         Write-Host "    Application log goes back to: $($oldestApp.ToString('yyyy-MM-dd HH:mm:ss'))" -ForegroundColor DarkGray
-                        if ($oldestApp -gt (Get-Date).AddDays(-30)) {
-                            Write-Host "    [!] Log has rolled over - it holds less than 30 days, so older activity may be gone." -ForegroundColor Yellow
+                        if ($oldestApp -gt (Get-Date).AddDays(-$scHistoryDays)) {
+                            Write-Host "    [!] Log has rolled over - it holds less than $scHistoryDays days, so older activity may be gone." -ForegroundColor Yellow
                         }
                     }
                     $scProviders = @(Get-WinEvent -ListProvider "*ScreenConnect*" -ErrorAction SilentlyContinue)
