@@ -3104,10 +3104,10 @@ function Get-RMMHunt {
         @{ Name = "eBLVD";               Exes = @("eblvd.exe","eblvdhost.exe","eblvd-host.exe","eblvdservice.exe");            Services = @("eBLVD","eBLVD Host","eBLVDService");           RegKeys = @("eBLVD");                      Paths = @("$env:ProgramFiles\eBLVD","${env:ProgramFiles(x86)}\eBLVD","$env:APPDATA\eBLVD") },
         @{ Name = "ScreenConnect";        Exes = @("screenconnect.clientservice.exe","connectwisecontrol.clientservice.exe","screenconnect.exe"); Services = @("ScreenConnect Client","ConnectWiseControl"); RegKeys = @("ScreenConnect","ConnectWise Control"); Paths = @("$env:ProgramFiles\ScreenConnect Client","$env:APPDATA\ScreenConnect Client") },
         @{ Name = "TeamViewer";           Exes = @("teamviewer.exe","teamviewer_service.exe","tv_w32.exe","tv_x64.exe");      Services = @("TeamViewer","TeamViewer12","TeamViewer13","TeamViewer14","TeamViewer15"); RegKeys = @("TeamViewer"); Paths = @("$env:ProgramFiles\TeamViewer","${env:ProgramFiles(x86)}\TeamViewer") },
-        @{ Name = "GoTo (LogMeIn)";       Exes = @("logmein.exe","logmeinrescue.exe","goto.exe","g2mainapplication.exe","g2mstart.exe","lmiignition.exe","lmi_rescue.exe","lmi_rescue_srv.exe","support-logmeinrescue.exe"); Services = @("LogMeIn","LMIGuardianSvc","GoToMeeting","LMIRescue"); RegKeys = @("LogMeIn","GoTo","LogMeIn Rescue"); Paths = @("$env:ProgramFiles\LogMeIn","${env:ProgramFiles(x86)}\LogMeIn","$env:LOCALAPPDATA\LogMeIn Rescue Applet","$env:LOCALAPPDATA\LogMeIn") },
+        @{ Name = "GoTo (LogMeIn)";       Exes = @("logmein.exe","logmeinrescue.exe","goto.exe","g2mainapplication.exe","g2mstart.exe","lmiignition.exe","lmi_rescue.exe","lmi_rescue_srv.exe","support-logmeinrescue.exe","g2aservice.exe","gotoassistservice.exe"); Services = @("LogMeIn","LMIGuardianSvc","GoToMeeting","LMIRescue"); RegKeys = @("LogMeIn","GoTo","LogMeIn Rescue"); Paths = @("$env:ProgramFiles\LogMeIn","${env:ProgramFiles(x86)}\LogMeIn","$env:LOCALAPPDATA\LogMeIn Rescue Applet","$env:LOCALAPPDATA\LogMeIn") },
         @{ Name = "Atera";                Exes = @("ateraagent.exe","atera_agent.exe");                                        Services = @("AteraAgent");                                 RegKeys = @("Atera Networks");             Paths = @("$env:ProgramFiles\ATERA Networks") },
         @{ Name = "NinjaRMM";             Exes = @("ninjarmmagent.exe","ninjaone.exe","ninjapatcher.exe");                  Services = @("Ninja RMM Agent","NinjaRMMAgent","NinjaOne");  RegKeys = @("NinjaRMM","NinjaOne");        Paths = @("$env:ProgramFiles\NinjaRMMAgent","$env:ProgramFiles\NinjaOne") },
-        @{ Name = "Splashtop";            Exes = @("srserver.exe","splashtopsos.exe","srmanager.exe","sragent.exe");           Services = @("SplashtopRemoteService","SRService");         RegKeys = @("Splashtop");                  Paths = @("$env:ProgramFiles\Splashtop","${env:ProgramFiles(x86)}\Splashtop") },
+        @{ Name = "Splashtop";            Exes = @("srserver.exe","splashtopsos.exe","srmanager.exe","sragent.exe","srservice.exe","splashtop-streamer.exe","splashtopstreamer.exe","strwinclt.exe");           Services = @("SplashtopRemoteService","SRService");         RegKeys = @("Splashtop");                  Paths = @("$env:ProgramFiles\Splashtop","${env:ProgramFiles(x86)}\Splashtop") },
         @{ Name = "RemotePC";             Exes = @("remotepc.exe","remotepchd.exe","remotepcservice.exe");                     Services = @("RemotePCService","RemotePCUIService");        RegKeys = @("RemotePC");                   Paths = @("$env:ProgramFiles\RemotePC") },
         @{ Name = "Kaseya VSA";           Exes = @("agentmon.exe","kaseyaremotecontrol.exe");                                  Services = @("Kaseya Agent","KaseyaRemoteControl");         RegKeys = @("Kaseya");                     Paths = @("$env:ProgramFiles\Kaseya") },
         @{ Name = "ConnectWise Automate"; Exes = @("ltsvc.exe","ltsvcmon.exe","lttray.exe");                                   Services = @("LTService","LTSvcMon");                       RegKeys = @("LabTech Software");           Paths = @("C:\Windows\LTSvc","$env:ProgramFiles\LabTech") },
@@ -3122,11 +3122,35 @@ function Get-RMMHunt {
         @{ Name = "Pulseway";             Exes = @("pulseway.exe","pcmonitor.exe");                                            Services = @("Pulseway","PCMonitor");                      RegKeys = @("Pulseway","MMSOFT Design");   Paths = @("$env:ProgramFiles\Pulseway") },
         @{ Name = "N-able N-sight";       Exes = @("winagent.exe","wr_system_monitor.exe");                                    Services = @("Windows Agent","Advanced Monitoring Agent"); RegKeys = @("Advanced Monitoring Agent");  Paths = @("$env:ProgramFiles\Advanced Monitoring Agent") },
         @{ Name = "N-able Take Control";  Exes = @("basupsrvc.exe","basupapp.exe","bomgar-scc.exe","bomgar-pac.exe");            Services = @("BASupportExpressSrvcU","Bomgar Remote Support");      RegKeys = @("Bomgar","Take Control","N-able Take Control"); Paths = @("$env:ProgramFiles\Bomgar","${env:ProgramFiles(x86)}\Bomgar","$env:ProgramFiles\N-able Technologies\Take Control") },
+        @{ Name = "ITAgent";              Exes = @("itagentrmmsender.exe","itagentrmmsendersl.exe");                             Services = @("ITAgent");                                    RegKeys = @("ITAgent");                    Paths = @("$env:ProgramFiles\ITAgent","${env:ProgramFiles(x86)}\ITAgent") },
         @{ Name = "Zoho Assist";          Exes = @("zohoassist.exe","zaservice.exe");                                          Services = @("ZohoAssistService","Zoho Assist Unattended Agent"); RegKeys = @("Zoho Assist");       Paths = @("$env:ProgramFiles\ZohoAssist") },
         @{ Name = "Cloudflare Tunnel";    Exes = @("cloudflared.exe");                                                         Services = @("Cloudflared");                               RegKeys = @("Cloudflare");                 Paths = @("$env:ProgramFiles\Cloudflare","$env:APPDATA\cloudflared") },
         @{ Name = "TacticalRMM";          Exes = @("tacticalrmm.exe");                                                         Services = @("tacticalrmm","Mesh Agent");                  RegKeys = @("TacticalRMM");               Paths = @("$env:ProgramFiles\TacticalRMM") },
         @{ Name = "PDQ Deploy";           Exes = @("pdqdeploy.exe","pdqdeployrunner.exe");                                     Services = @("PDQDeployRunner");                           RegKeys = @("PDQ Deploy");                 Paths = @("$env:ProgramFiles\PDQ Deploy") },
-        @{ Name = "FleetDeck";            Exes = @("fleetdeck_agent.exe","fleetdeck_agent_svc.exe");                           Services = @("FleetDeck Agent");                           RegKeys = @("FleetDeck");                  Paths = @("$env:ProgramFiles\FleetDeck") }
+        @{ Name = "FleetDeck";            Exes = @("fleetdeck_agent.exe","fleetdeck_agent_svc.exe");                           Services = @("FleetDeck Agent");                           RegKeys = @("FleetDeck");                  Paths = @("$env:ProgramFiles\FleetDeck") },
+        @{ Name = "RustDesk";             Exes = @("rustdesk.exe");                                                            Services = @("RustDesk");                                   RegKeys = @("RustDesk");                   Paths = @("$env:ProgramFiles\RustDesk") },
+        @{ Name = "Syncro";               Exes = @("syncro.service.exe","syncro.service.runner.exe","syncro.app.runner.exe","syncro.overmind.service.exe","syncrolive.agent.runner.exe","syncrolive.service.runner.exe","kabuto.service.runner.exe"); Services = @("Syncro","Kabuto"); RegKeys = @("Syncro"); Paths = @("$env:ProgramFiles\RepairTech","C:\ProgramData\Syncro") },
+        @{ Name = "ITarian (Comodo)";     Exes = @("rmmservice.exe","itsmagent.exe","itsmservice.exe");                         Services = @("ITarian","ITSMService");                      RegKeys = @("ITarian","COMODO ITSM");      Paths = @("${env:ProgramFiles(x86)}\ITarian","$env:ProgramFiles\ITarian","${env:ProgramFiles(x86)}\COMODO\Comodo ITSM") },
+        @{ Name = "Level";                Exes = @("level.exe");                                                               Services = @();                                            RegKeys = @();                             Paths = @("$env:ProgramFiles\Level") },
+        @{ Name = "PDQ Connect";          Exes = @("pdq-connect-agent.exe","pdq-connect-updater.exe");                          Services = @("PDQConnect");                                 RegKeys = @("PDQConnect");                 Paths = @("$env:ProgramFiles\PDQ\PDQConnectAgent","C:\ProgramData\PDQ\PDQConnectAgent") },
+        @{ Name = "MSP360 RMM";           Exes = @("rmm.agent.exe","rmm.agent.launcher.exe");                                   Services = @("RMM.Agent");                                  RegKeys = @("MSP360");                     Paths = @("$env:ProgramFiles\RMM Agent") },
+        @{ Name = "Chrome Remote Desktop"; Exes = @("remoting_host.exe");                                                        Services = @("chromoting");                                 RegKeys = @("Chrome Remote Desktop");      Paths = @("${env:ProgramFiles(x86)}\Google\Chrome Remote Desktop","$env:ProgramFiles\Google\Chrome Remote Desktop") },
+        @{ Name = "Quick Assist";         Exes = @("quickassist.exe");                                                         Services = @();                                            RegKeys = @();                             Paths = @() },
+        @{ Name = "GotoHTTP";             Exes = @("gotohttp.exe");                                                            Services = @();                                            RegKeys = @();                             Paths = @() },
+        @{ Name = "DWService";            Exes = @("dwagsvc.exe","dwagent.exe");                                                Services = @("DWAgent");                                    RegKeys = @("DWAgent");                    Paths = @("$env:ProgramFiles\DWAgent") },
+        @{ Name = "VNC (UltraVNC/TightVNC/RealVNC)"; Exes = @("winvnc.exe","ultravnc*.exe","tvnserver.exe","vncserver.exe"); Services = @("uvnc_service","tvnserver","vncserver"); RegKeys = @("UltraVNC","TightVNC","RealVNC"); Paths = @("$env:ProgramFiles\uvnc bvba","$env:ProgramFiles\TightVNC","$env:ProgramFiles\RealVNC") },
+        @{ Name = "AnyViewer";            Exes = @("anyviewer.exe","rcservice.exe","rcclient.exe");                             Services = @("RCService");                                  RegKeys = @("AnyViewer");                  Paths = @("${env:ProgramFiles(x86)}\AnyViewer","$env:ProgramFiles\AnyViewer") },
+        @{ Name = "ToDesk";               Exes = @("todesk.exe","todesk_service.exe");                                          Services = @("ToDesk");                                     RegKeys = @("ToDesk");                     Paths = @("$env:ProgramFiles\ToDesk","${env:ProgramFiles(x86)}\ToDesk") },
+        @{ Name = "UltraViewer";          Exes = @("ultraviewer*.exe");                                                        Services = @("UltraViewer");                                RegKeys = @("UltraViewer");                Paths = @("${env:ProgramFiles(x86)}\UltraViewer","$env:ProgramFiles\UltraViewer") },
+        @{ Name = "LiteManager";          Exes = @("romserver.exe","romviewer.exe");                                            Services = @();                                            RegKeys = @("LiteManager");                Paths = @() },
+        @{ Name = "Radmin";               Exes = @("radmin.exe","rserver3.exe");                                                Services = @("RServer3");                                   RegKeys = @("Radmin");                     Paths = @() },
+        @{ Name = "ngrok";                Exes = @("ngrok.exe");                                                               Services = @();                                            RegKeys = @();                             Paths = @() },
+        @{ Name = "AeroAdmin";            Exes = @("aeroadmin.exe");                                                           Services = @();                                            RegKeys = @();                             Paths = @() },
+        @{ Name = "Getscreen";            Exes = @("getscreen.exe");                                                           Services = @();                                            RegKeys = @("Getscreen");                  Paths = @() },
+        @{ Name = "ISL Light";            Exes = @("isllight.exe","isllightclient.exe");                                        Services = @();                                            RegKeys = @("ISL Light");                  Paths = @() },
+        @{ Name = "Remotely";             Exes = @("remotely_agent.exe","remotely_desktop.exe");                                Services = @("Remotely");                                   RegKeys = @();                             Paths = @() },
+        @{ Name = "Nezha";                Exes = @("nezha-agent.exe");                                                         Services = @("nezha");                                      RegKeys = @();                             Paths = @() },
+        @{ Name = "ManageEngine Remote Access Plus"; Exes = @("manageengine_remote_access_plus.exe");                          Services = @();                                            RegKeys = @("Remote Access Plus");         Paths = @() }
     )
 
     # Cache once for performance
@@ -3199,9 +3223,9 @@ function Get-RMMHunt {
                             # Fall back to registry key last-write time
                             try { $key.LastWriteTime.ToString("yyyy-MM-dd HH:mm:ss") } catch { "Unknown" }
                         }
+                        $locPart = if ($installLoc) { " | Location: $installLoc" } else { "" }
                         $detections += [PSCustomObject]@{
                             DetectionType = "Installed (Registry)"
-                            $locPart = if ($installLoc) { " | Location: $installLoc" } else { "" }
                             Detail        = "$displayName$locPart"
                             RemType       = "Registry"
                             RemPath       = $key.PSPath
@@ -3335,6 +3359,7 @@ function Get-RMMHunt {
         'Pulseway'          = @('mmsoft design ltd')
         'MeshCentral'       = @('ylian saint-hilaire')
         'FleetDeck'         = @('fleetdeck.io, inc.')
+        'ITAgent'           = @('it agent, inc.')
     }
 
     # Collect known legitimate exe names to exclude (these are already caught by normal detection)
@@ -3399,6 +3424,7 @@ function Get-RMMHunt {
                         'NinjaRMM'    = @('ninja','ninjarmm','ninjaone')
                         'Atera'       = @('atera')
                         'Zoho'        = @('zoho')
+                        'ITAgent'     = @('itagent')
                     }
                     if (-not $inExpectedPath) {
                         $aliases = if ($vendorAliases.ContainsKey($vendor)) { $vendorAliases[$vendor] } else { @($vendor.ToLower()) }
@@ -4519,7 +4545,7 @@ function Show-Menu {
     Write-Host "  [2]  Global Keyword Hunt" -ForegroundColor White
     Write-Host "       Registry, Tasks, Services, Processes, File System" -ForegroundColor DarkGray
     Write-Host "  [3]  RMM Software Hunt" -ForegroundColor White
-    Write-Host "       Detect AnyDesk, ScreenConnect, TeamViewer, and 20+ RMM tools" -ForegroundColor DarkGray
+    Write-Host "       Detect AnyDesk, ScreenConnect, TeamViewer, and 50+ RMM tools" -ForegroundColor DarkGray
     Write-Host ""
     Write-Host "  EXECUTION & PROCESS ANALYSIS  |  Execution & Processus" -ForegroundColor Yellow
     Write-Host "  ---------------------------------------------------------------" -ForegroundColor DarkGray
